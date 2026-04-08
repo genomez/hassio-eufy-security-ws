@@ -1,0 +1,118 @@
+diff --git a/src/http/device.ts b/src/http/device.ts
+index 6030909..03d06e9 100644
+--- a/src/http/device.ts
++++ b/src/http/device.ts
+@@ -1170,7 +1170,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
+           property.name === PropertyName.DeviceMotionDetectionTypePet ||
+           property.name === PropertyName.DeviceMotionDetectionTypeVehicle ||
+           property.name === PropertyName.DeviceMotionDetectionTypeAllOtherMotions) &&
+-        this.getStationSerial().startsWith("T8030")
++        Station.isDeviceControlledByHomeBaseBySn(this.getStationSerial())
+       ) {
+         const booleanProperty = property as PropertyMetadataBoolean;
+         try {
+@@ -3546,6 +3546,29 @@ export class SoloCamera extends Camera {
+                 }, eventDurationSeconds * 1000)
+               );
+ 
++              if (this.config.simultaneousDetections) {
++                this.updateProperty(PropertyName.DeviceMotionDetected, true);
++                this.clearEventTimeout(DeviceEvent.MotionDetected);
++                this.eventTimeouts.set(
++                  DeviceEvent.MotionDetected,
++                  setTimeout(async () => {
++                    this.updateProperty(PropertyName.DeviceMotionDetected, false);
++                    this.eventTimeouts.delete(DeviceEvent.MotionDetected);
++                  }, eventDurationSeconds * 1000)
++                );
++              }
++              break;
++            case IndoorPushEvent.VEHICLE_DETECTION:
++              this.updateProperty(PropertyName.DeviceVehicleDetected, true);
++              this.clearEventTimeout(DeviceEvent.VehicleDetected);
++              this.eventTimeouts.set(
++                DeviceEvent.VehicleDetected,
++                setTimeout(async () => {
++                  this.updateProperty(PropertyName.DeviceVehicleDetected, false);
++                  this.eventTimeouts.delete(DeviceEvent.VehicleDetected);
++                }, eventDurationSeconds * 1000)
++              );
++
+               if (this.config.simultaneousDetections) {
+                 this.updateProperty(PropertyName.DeviceMotionDetected, true);
+                 this.clearEventTimeout(DeviceEvent.MotionDetected);
+diff --git a/src/http/station.ts b/src/http/station.ts
+index 1c575e6..fc8f42c 100644
+--- a/src/http/station.ts
++++ b/src/http/station.ts
+@@ -828,6 +828,10 @@ export class Station extends TypedEmitter<StationEvents> {
+     return sn.startsWith("T8025");
+   }
+ 
++  public static isStationHomeBaseProfessionalS1BySn(sn: string): boolean {
++    return sn.startsWith("T9000");
++  }
++
+   public isStationHomeBase2OrOlder(): boolean {
+     return Station.isStationHomeBase2OrOlder(this.rawStation.device_type);
+   }
+@@ -841,20 +845,28 @@ export class Station extends TypedEmitter<StationEvents> {
+   }
+ 
+   /**
+-   * Checks if the station is a HomeBase 3 or HomeBase mini for determining if SoloDevices are connected to a supported HomeBase.
+-   * @returns Returns true, if this is a HomeBase 3 or a HomeBase mini, otherwise false.
++   * Checks if the station is a HomeBase 3, HomeBase mini, or HomeBase Professional S1 for determining if SoloDevices are connected to a supported HomeBase.
++   * @returns Returns true, if this is a HomeBase 3, HomeBase mini, or HomeBase Professional S1, otherwise false.
+    */
+   public isDeviceControlledByHomeBase(): boolean {
+-    return this.isStationHomeBase3() || this.isStationHomeBaseMini();
++    return (
++      this.isStationHomeBase3() ||
++      this.isStationHomeBaseMini() ||
++      Station.isStationHomeBaseProfessionalS1BySn(this.getSerial())
++    );
+   }
+ 
+   /**
+-   * Checks if the station is a HomeBase 3 or HomeBase mini for determining if SoloDevices are connected to a supported HomeBase The check will be done by the given serial number.
++   * Checks if the station is a HomeBase 3, HomeBase mini, or HomeBase Professional S1 for determining if SoloDevices are connected to a supported HomeBase. The check will be done by the given serial number.
+    * @param sn The serial of the station to check.
+-   * @returns Returns true, if this is a HomeBase 3 or a HomeBase mini, otherwise false.
++   * @returns Returns true, if this is a HomeBase 3, HomeBase mini, or HomeBase Professional S1, otherwise false.
+    */
+   public static isDeviceControlledByHomeBaseBySn(sn: string): boolean {
+-    return Station.isStationHomeBase3BySn(sn) || Station.isStationHomeBaseMiniBySn(sn);
++    return (
++      Station.isStationHomeBase3BySn(sn) ||
++      Station.isStationHomeBaseMiniBySn(sn) ||
++      Station.isStationHomeBaseProfessionalS1BySn(sn)
++    );
+   }
+ 
+   public isIntegratedDevice(): boolean {
+diff --git a/src/http/types.ts b/src/http/types.ts
+index c32d0da..be7a5d3 100644
+--- a/src/http/types.ts
++++ b/src/http/types.ts
+@@ -7835,6 +7835,7 @@ export const DeviceProperties: Properties = {
+     [PropertyName.DeviceWatermark]: DeviceWatermarkProperty,
+     [PropertyName.DeviceMotionDetected]: DeviceMotionDetectedProperty,
+     [PropertyName.DevicePersonDetected]: DevicePersonDetectedProperty,
++    [PropertyName.DeviceVehicleDetected]: DeviceVehicleDetectedProperty,
+     [PropertyName.DeviceStatusLed]: DeviceStatusLedProperty,
+     [PropertyName.DevicePicture]: DevicePictureProperty,
+     [PropertyName.DevicePictureUrl]: DevicePictureUrlProperty,
+diff --git a/src/push/service.ts b/src/push/service.ts
+index 8f3b9f8..2281b19 100644
+--- a/src/push/service.ts
++++ b/src/push/service.ts
+@@ -560,7 +560,7 @@ export class PushNotificationService extends TypedEmitter<PushNotificationServic
+ 
+         if (
+           Station.isStationHomeBase3(normalizedMessage.type) ||
+-          (normalizedMessage.station_sn.startsWith("T8030") && Device.isCamera(normalizedMessage.type))
++          (Station.isDeviceControlledByHomeBaseBySn(normalizedMessage.station_sn) && Device.isCamera(normalizedMessage.type))
+         ) {
+           const platformPushData = payload.payload as PlatformPushMode;
+           normalizedMessage.name = platformPushData.name ? platformPushData.name : "";
