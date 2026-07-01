@@ -1,8 +1,7 @@
-name: "Publish"
+name: "Publish dev"
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -11,6 +10,8 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
+        with:
+          ref: debug
       - name: Login to DockerHub
         uses: docker/login-action@v3
         with:
@@ -21,7 +22,7 @@ jobs:
         with:
           args: |
             --amd64 --aarch64   \
-            --target eufy-security-ws \
+            --target eufy-security-ws-dev \
             --docker-hub bropat
         #env:
         #  CAS_API_KEY: ${{ secrets.CAS_TOKEN }}

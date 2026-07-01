@@ -4,6 +4,10 @@
 
 [![ci][ci-shield]][ci-url] ![Release][release-shield] ![Stars][stars-shield]
 
+Join us on Discord:
+
+<a target="_blank" href="https://discord.gg/5wjQ2asb64"><img src="https://dcbadge.limes.pink/api/server/5wjQ2asb64" alt="" /></a>
+
 ## Add-ons
 
 This repository contains the following add-ons
@@ -25,7 +29,21 @@ This repository contains the following add-ons
 
       [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbropat%2Fhassio-eufy-security-ws)
 
-2. To install an addon click on the relative addon link above to view the docs.
+2. To install the addon, press `Add-On store` and select `eufy-security-ws` and ensure the configuration is filled up before starting it.
+
+## Installation Dev version
+
+1. To add this repository to Home Assistant you have 2 options:
+
+   1. Go to **Settings → Add-ons → Add-on store** and click **⋮ → Repositories**, fill in `https://github.com/bropat/hassio-eufy-security-ws#debug` and click **Add → Close**
+   2. click the **Add repository** button below, click **Add → Close** (You might need to enter the **internal IP address** of your Home Assistant instance first).
+
+      [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbropat%2Fhassio-eufy-security-ws#debug)
+
+2. To install the addon, press `Add-On store` and select `eufy-security-ws-dev`.
+3. If requested, setup the bespoke github url and github branch to run a develop version of the eufy client.
+
+*Note: This is only used if a developer is asking you to run it, please always use official one for stable version*
 
 ## Changelog
 
@@ -52,3 +70,7 @@ Feel free to create a PR for fixes and enhancements.
 [armhf-shield]: https://img.shields.io/badge/armhf-yes-green.svg
 [armv7-shield]: https://img.shields.io/badge/armv7-yes-green.svg
 [i386-shield]: https://img.shields.io/badge/i386-yes-green.svg
+
+## Deployment
+
+Instructions aimed at maintainers for deploying a new version: [Deployment](deployment.md)
