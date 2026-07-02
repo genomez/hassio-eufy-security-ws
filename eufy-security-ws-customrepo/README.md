@@ -1,6 +1,8 @@
 # eufy-security-ws-customrepo
 
-Home Assistant add-on that builds **eufy-security-ws 3.0.1** with:
+**Maintainer:** [genomez](https://github.com/genomez). **`eufy-security-ws-customrepo`** pattern from [MELSAID888](https://github.com/MELSAID888/hassio-eufy-security-ws-customrepo); extended for T9000 on [bropat/hassio-eufy-security-ws](https://github.com/bropat/hassio-eufy-security-ws).
+
+Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
 - Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#T9000-testing`)
 - Automatic **eufy_mega v6** login (mega-login patch)

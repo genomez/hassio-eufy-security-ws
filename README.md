@@ -11,22 +11,25 @@ Fork of [bropat/hassio-eufy-security-ws](https://github.com/bropat/hassio-eufy-s
 Motion, live thumbnails, person/face names, guard mode, per-camera privacy, floodlights, and HA automations — on T9000 with an eufy_mega account. See the guide for requirements and caveats.
 
 ### Quick reference
-| Component | Source |
-|-----------|--------|
-| Add-on repository | `https://github.com/genomez/hassio-eufy-security-ws` |
-| Add-on to install | **`eufy-security-ws-customrepo`** |
-| Client library branch | `genomez/eufy-security-client#T9000-testing` |
-| HA integration (HACS) | [fuatakgun/eufy_security](https://github.com/fuatakgun/eufy_security) |
+
+| Component | Maintainer | Source |
+|-----------|------------|--------|
+| Add-on repository | **genomez** | `https://github.com/genomez/hassio-eufy-security-ws` |
+| Add-on to install | **genomez** | **`eufy-security-ws-customrepo`** (not bropat’s `eufy-security-ws`) |
+| Client library branch | **genomez** | `genomez/eufy-security-client#T9000-testing` |
+| HA integration (HACS) | **fuatakgun** | [fuatakgun/eufy_security](https://github.com/fuatakgun/eufy_security) |
+| Upstream reference | bropat | [bropat/hassio-eufy-security-ws](https://github.com/bropat/hassio-eufy-security-ws), [bropat/eufy-security-client](https://github.com/bropat/eufy-security-client) |
+| Customrepo pattern | MELSAID888 | [hassio-eufy-security-ws-customrepo](https://github.com/MELSAID888/hassio-eufy-security-ws-customrepo) (incorporated here) |
 
 ## Add-ons in this repository
 
 ### [eufy-security-ws-customrepo](./eufy-security-ws-customrepo/) — **use this for T9000**
 
-Custom build with mega login patch and git-pinned client. Version `3.0.1-p2p-nickname`.
+Maintained by **genomez**. Evolved from [MELSAID888/hassio-eufy-security-ws-customrepo](https://github.com/MELSAID888/hassio-eufy-security-ws-customrepo) (custom client via `build.yaml`) with T9000 client pin, mega login patch, and Node 24 build. Version `3.0.1-p2p-nickname`.
 
 ### [eufy-security-ws](./eufy-security-ws/)
 
-Upstream-style add-on (stock npm client). Included for reference; **not** used for T9000.
+Upstream-style add-on from **bropat**’s lineage (stock npm client). Included for reference; **not** used for T9000.
 
 ## Installation
 
@@ -43,4 +46,4 @@ Upstream-style add-on (stock npm client). Included for reference; **not** used f
 
 ## Upstream
 
-Based on [bropat/hassio-eufy-security-ws](https://github.com/bropat/hassio-eufy-security-ws). Client library upstream: [bropat/eufy-security-client](https://github.com/bropat/eufy-security-client) (deprecated stopgap; T9000 work lives in this fork).
+Based on [bropat/hassio-eufy-security-ws](https://github.com/bropat/hassio-eufy-security-ws). **`eufy-security-ws-customrepo`** pattern from [MELSAID888/hassio-eufy-security-ws-customrepo](https://github.com/MELSAID888/hassio-eufy-security-ws-customrepo). Client library upstream: [bropat/eufy-security-client](https://github.com/bropat/eufy-security-client) (deprecated stopgap; T9000 work lives in [genomez/eufy-security-client](https://github.com/genomez/eufy-security-client)).

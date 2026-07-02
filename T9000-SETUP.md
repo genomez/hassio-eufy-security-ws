@@ -36,11 +36,13 @@ If you are on a T9000, you need this fork pair — not a limitation of the setup
 
 Three layers — use **all three**:
 
-| Layer | Source | Notes |
-|-------|--------|-------|
-| **HA integration** | [fuatakgun/eufy_security](https://github.com/fuatakgun/eufy_security) via HACS | Standard community integration (e.g. v8.2.4). **Do not** use a custom HA integration fork for T9000. |
-| **WebSocket add-on** | [genomez/hassio-eufy-security-ws](https://github.com/genomez/hassio-eufy-security-ws) → **`eufy-security-ws-customrepo`** | Builds `eufy-security-ws` 3.0.1 with mega login patch + custom client |
-| **Client library** | [genomez/eufy-security-client](https://github.com/genomez/eufy-security-client) branch **`T9000-testing`** | T9000 station type, mega v6 login, P2P push 1317/1318 |
+| Layer | Maintainer | Source | Notes |
+|-------|------------|--------|-------|
+| **HA integration** | [fuatakgun](https://github.com/fuatakgun) | [fuatakgun/eufy_security](https://github.com/fuatakgun/eufy_security) via HACS | Standard community integration (e.g. v8.2.4). **Do not** use a custom HA integration fork for T9000. |
+| **WebSocket add-on** | [genomez](https://github.com/genomez) | [genomez/hassio-eufy-security-ws](https://github.com/genomez/hassio-eufy-security-ws) → **`eufy-security-ws-customrepo`** | **Install this add-on**, not bropat’s stock `eufy-security-ws`. Builds `eufy-security-ws` 3.0.1 with mega login patch + custom client. |
+| **Client library** | [genomez](https://github.com/genomez) | [genomez/eufy-security-client](https://github.com/genomez/eufy-security-client) branch **`T9000-testing`** | T9000 station type, mega v6 login, P2P push 1317/1318 |
+
+**Upstream (reference only for T9000):** [bropat](https://github.com/bropat) maintains the original [hassio-eufy-security-ws](https://github.com/bropat/hassio-eufy-security-ws), [eufy-security-ws](https://github.com/bropat/eufy-security-ws), and [eufy-security-client](https://github.com/bropat/eufy-security-client). The **`eufy-security-ws-customrepo`** add-on pattern (git-pinned client via `build.yaml`) came from [MELSAID888/hassio-eufy-security-ws-customrepo](https://github.com/MELSAID888/hassio-eufy-security-ws-customrepo) and was incorporated into this repo with T9000 client, mega login, and Node 24 build fixes.
 
 ```
 Eufy cloud (eufy_mega) ──► add-on (eufy-security-ws + custom client)
@@ -214,13 +216,20 @@ Related upstream context:
 
 ## Repositories (canonical list)
 
-| Repo | Purpose |
-|------|---------|
-| https://github.com/genomez/eufy-security-client | Client library (`T9000-testing` / `master`) |
-| https://github.com/genomez/hassio-eufy-security-ws | HA add-on (`eufy-security-ws-customrepo`) |
-| https://github.com/fuatakgun/eufy_security | HA integration (HACS) |
+| Maintainer | Repo | Role |
+|------------|------|------|
+| **genomez** | https://github.com/genomez/hassio-eufy-security-ws | Add-on repo — install **`eufy-security-ws-customrepo`** |
+| **genomez** | https://github.com/genomez/eufy-security-client | Client library (`T9000-testing` / `master`) |
+| **fuatakgun** | https://github.com/fuatakgun/eufy_security | HA integration (HACS) |
+| bropat *(upstream)* | https://github.com/bropat/hassio-eufy-security-ws | Original add-on repo — **not** used for T9000 |
+| bropat *(upstream)* | https://github.com/bropat/eufy-security-client | Original client — **not** used for T9000 |
+| MELSAID888 *(customrepo origin)* | https://github.com/MELSAID888/hassio-eufy-security-ws-customrepo | Earlier **`eufy-security-ws-customrepo`** pattern — **use genomez repo instead** |
 
 There is **no** separate `genomez/eufy_security` fork — use fuatakgun from HACS.
+
+### Coming from MELSAID888’s customrepo?
+
+If you previously installed [MELSAID888/hassio-eufy-security-ws-customrepo](https://github.com/MELSAID888/hassio-eufy-security-ws-customrepo) (manual copy under `/addons/` or a local fork), switch to **`https://github.com/genomez/hassio-eufy-security-ws`** as the add-on repository. This repo keeps the same **`eufy-security-ws-customrepo`** slug but adds the T9000 client pin, eufy_mega auto-login, and production-tested `build.yaml` / Dockerfile.
 
 ## Reporting issues
 
