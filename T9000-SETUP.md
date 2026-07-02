@@ -100,14 +100,14 @@ ipv4first: false
 event_duration: 10
 stations:
   - serial_number: T9000PXXXXXXXXXXX
-    ip_address: 192.168.50.119
+    ip_address: 192.168.1.100
 ```
 
 ### Important options
 
 | Option | Recommendation |
 |--------|----------------|
-| **`stations`** | Strongly recommended for T9000. Set the base **serial number** and **LAN IP** (or subnet broadcast, e.g. `192.168.50.255`). Speeds P2P discovery and helps device control. |
+| **`stations`** | Strongly recommended for T9000. Set the base **serial number** and **LAN IP** (or subnet broadcast, e.g. `192.168.1.255`). Speeds P2P discovery and helps device control. |
 | **`debug`** | `false` for normal use. Enable only when troubleshooting — logs are very verbose. |
 | **`ipv4first`** | Try `true` if push registration fails with endless `create push credentials error` (IPv6 Firebase issue). |
 | **`country`** | ISO 3166-1 alpha-2 code matching your Eufy account region. |
