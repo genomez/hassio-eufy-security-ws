@@ -71,6 +71,42 @@ if bashio::config.true 'ipv4first'; then
     IPV4_FIRST_NODE_OPTION="--dns-result-order=ipv4first"
 fi
 
+# T9000 WebRTC: bind ICE host candidates to the LAN interface that reaches the hub.
+FIRST_STATION_IP=""
+if bashio::config.has_value 'stations'; then
+    while read -r data; do
+        if [ -n "$data" ]; then
+            TMP_RTC=($(echo "${data}" | tr -d "{}\"[:blank:]" | tr "," " " | sed 's/serial_number://g;s/ip_address://g'))
+            if [ -n "${TMP_RTC[1]}" ]; then
+                FIRST_STATION_IP="${TMP_RTC[1]}"
+                break
+            fi
+        fi
+    done <<<"$(bashio::config 'stations')"
+fi
+if [ -n "$FIRST_STATION_IP" ]; then
+    RTC_BIND_ADDRESS="$(ip -4 route get "$FIRST_STATION_IP" 2>/dev/null | awk '/src/ { for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+    if [ -n "$RTC_BIND_ADDRESS" ]; then
+        export RTC_BIND_ADDRESS
+        bashio::log.info "RTC_BIND_ADDRESS=${RTC_BIND_ADDRESS} (route to ${FIRST_STATION_IP})"
+    fi
+fi
+if [ -z "${RTC_BIND_ADDRESS:-}" ]; then
+    RTC_BIND_ADDRESS="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -n "$RTC_BIND_ADDRESS" ]; then
+        export RTC_BIND_ADDRESS
+        bashio::log.info "RTC_BIND_ADDRESS=${RTC_BIND_ADDRESS} (hostname -I)"
+    fi
+fi
+
+# T9000: LAN host ICE when HA and HomeBase share a subnet; override with relay if needed.
+export RTC_ICE_POLICY="${RTC_ICE_POLICY:-all}"
+export RTC_DELAY_SDP_UNTIL_GATHERING="${RTC_DELAY_SDP_UNTIL_GATHERING:-0}"
+export RTC_POLL_MAX_MISSES="${RTC_POLL_MAX_MISSES:-3}"
+export RTC_POLL_WATCHDOG_MS="${RTC_POLL_WATCHDOG_MS:-35000}"
+export RTC_PROPERTY_REFRESH_MS="${RTC_PROPERTY_REFRESH_MS:-300000}"
+bashio::log.info "RTC_ICE_POLICY=${RTC_ICE_POLICY} RTC_DELAY_SDP_UNTIL_GATHERING=${RTC_DELAY_SDP_UNTIL_GATHERING} RTC_POLL_MAX_MISSES=${RTC_POLL_MAX_MISSES} RTC_POLL_WATCHDOG_MS=${RTC_POLL_WATCHDOG_MS} RTC_PROPERTY_REFRESH_MS=${RTC_PROPERTY_REFRESH_MS}"
+
 JSON_STRING="$( jq -n \
   --arg username "$USERNAME" \
   --arg password "$PASSWORD" \

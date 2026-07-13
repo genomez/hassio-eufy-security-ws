@@ -7,4 +7,4 @@ codenotary:
 args:
   EUFY_SECURITY_WS_VERSION: 3.0.1
   EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#T9000-testing"
-  EUFY_CLIENT_BUILD_ID: "p2p-nickname"
+  EUFY_CLIENT_BUILD_ID: "rtc-phase3-20260713c"
