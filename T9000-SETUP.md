@@ -139,6 +139,14 @@ The mega session is persisted under `/data` and typically survives restarts for 
 
 No custom integration fork is required.
 
+### Optional: dashboard companion (accurate "last event" times)
+
+The [`homeassistant/`](homeassistant/README.md) folder ships a drop-in HA package
+(template sensors + automations + `shell_command` helpers) that turns the add-on's
+event data into a dashboard with correct, locally-timed "last event" chips. See
+[`homeassistant/README.md`](homeassistant/README.md) for install steps. It is optional
+and independent of core camera functionality.
+
 ## 4. Verify it works
 
 ### Startup checklist

@@ -1,0 +1,1543 @@
+# Eufy Security companion package for the eufy-security-ws-customrepo add-on.
+#
+# Drop this file into /config/packages/ and enable packages in configuration.yaml:
+#     homeassistant:
+#       packages: !include_dir_named packages
+#
+# Also copy homeassistant/scripts/*.py -> /config/scripts/ (they are called below).
+#
+# Provides:
+#   - shell_command: sync helpers HA runs on a schedule / on new images
+#   - automation:    when to run the sync (start, reconnect, every 5 min, on new image)
+#   - template:      per-camera "last event" + "last event time" + activity chips
+#
+# SITE-SPECIFIC: the template sensors and FLC light list are wired to this author's
+# camera slugs / entity_ids. Edit the camera names/slugs to match your own entities.
+
+
+shell_command:
+  eufy_sync_snapshot_times: python3 /config/scripts/sync_eufy_snapshot_times.py
+  eufy_sync_flc_stale_lights: python3 /config/scripts/sync_flc_stale_lights.py
+
+
+automation:
+- id: 'eufy_snapshot_times_sync'
+  alias: 'Eufy: sync snapshot times from cache'
+  triggers:
+  - trigger: homeassistant
+    event: start
+  actions:
+  - delay:
+      seconds: 45
+  - action: shell_command.eufy_sync_snapshot_times
+  - action: shell_command.eufy_sync_flc_stale_lights
+  mode: single
+- id: 'eufy_reconnect_resync'
+  alias: 'Eufy: resync snapshot times and FLC lights after reconnect'
+  triggers:
+  - trigger: state
+    entity_id: binary_sensor.homebase_s1_connected
+    from: 'off'
+    to: 'on'
+    for:
+      seconds: 60
+  actions:
+  - action: shell_command.eufy_sync_snapshot_times
+  - action: shell_command.eufy_sync_flc_stale_lights
+  mode: single
+- id: 'eufy_snapshot_times_periodic'
+  alias: 'Eufy: periodic snapshot time sync'
+  triggers:
+  - trigger: time_pattern
+    minutes: "/5"
+  actions:
+  - action: shell_command.eufy_sync_snapshot_times
+  mode: single
+- id: 'eufy_snapshot_times_on_image'
+  alias: 'Eufy: sync snapshot times when a new image arrives'
+  triggers:
+  - trigger: state
+    entity_id: image.back_left_flc_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.back_yard_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.carport_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.cars_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.driveway_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.entrance_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.front_door_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.front_porch_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.front_yard_flc_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.front_yard_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.garage_flc_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.garage_side_flc_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.side_door_event_image
+    attribute: access_token
+  - trigger: state
+    entity_id: image.walkout_flc_event_image
+    attribute: access_token
+  actions:
+  - delay:
+      seconds: 5
+  - action: shell_command.eufy_sync_snapshot_times
+  mode: single
+  max_exceeded: silent
+
+template:
+# --- from eufy_cameras.yaml (per-camera last-event sensors) ---
+# Eufy camera latched last-event sensors (auto-generated)
+# Reload: Developer Tools -> YAML -> Template entities
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.back_left_flc_motion_detected
+        - binary_sensor.back_left_flc_person_detected
+        - binary_sensor.back_left_flc_identity_person_detected
+        - binary_sensor.back_left_flc_stranger_person_detected
+        - binary_sensor.back_left_flc_pet_detected
+        - binary_sensor.back_left_flc_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.back_left_flc_person_name
+    - platform: state
+      entity_id: image.back_left_flc_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.back_left_flc_last_event
+      name: "Back Left FLC Last Event"
+      unique_id: eufy_backleftflc_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.back_left_flc_last_event') }}
+        {% else %}
+        {% set n = states('sensor.back_left_flc_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.back_left_flc_last_event') }}
+        {% elif trigger.entity_id == 'sensor.back_left_flc_person_name' and not named %}
+          {{ states('sensor.back_left_flc_last_event') }}
+        {% elif is_state('binary_sensor.back_left_flc_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.back_left_flc_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.back_left_flc_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.back_left_flc_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.back_left_flc_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Back Left FLC"
+        slug: "back_left_flc"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.back_left_flc_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.back_left_flc_motion_detected', 'on') }}"
+        battery: "{{ 'n/a' }}"
+        wifi: "{{ states('sensor.back_left_flc_wifi_signal_level') }}"
+        thumbnail_entity: image.back_left_flc_event_image
+
+    - default_entity_id: sensor.back_left_flc_last_event_time
+      name: "Back Left FLC Last Event Time"
+      unique_id: eufy_backleftflc_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('back_left_flc') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.back_left_flc_last_event_time') if states('sensor.back_left_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.back_left_flc_last_event_time') if states('sensor.back_left_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.back_yard_motion_detected
+        - binary_sensor.back_yard_person_detected
+        - binary_sensor.back_yard_identity_person_detected
+        - binary_sensor.back_yard_stranger_person_detected
+        - binary_sensor.back_yard_pet_detected
+        - binary_sensor.back_yard_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.back_yard_person_name
+    - platform: state
+      entity_id: image.back_yard_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.back_yard_last_event
+      name: "Back Yard Last Event"
+      unique_id: eufy_backyard_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.back_yard_last_event') }}
+        {% else %}
+        {% set n = states('sensor.back_yard_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.back_yard_last_event') }}
+        {% elif trigger.entity_id == 'sensor.back_yard_person_name' and not named %}
+          {{ states('sensor.back_yard_last_event') }}
+        {% elif is_state('binary_sensor.back_yard_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.back_yard_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.back_yard_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.back_yard_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.back_yard_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Back Yard"
+        slug: "back_yard"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.back_yard_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.back_yard_motion_detected', 'on') }}"
+        battery: "{{ states('sensor.back_yard_battery_percentage') }}"
+        wifi: "{{ states('sensor.back_yard_wifi_signal_level') }}"
+        thumbnail_entity: image.back_yard_event_image
+
+    - default_entity_id: sensor.back_yard_last_event_time
+      name: "Back Yard Last Event Time"
+      unique_id: eufy_backyard_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('back_yard') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.back_yard_last_event_time') if states('sensor.back_yard_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.back_yard_last_event_time') if states('sensor.back_yard_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.carport_motion_detected
+        - binary_sensor.carport_person_detected
+        - binary_sensor.carport_identity_person_detected
+        - binary_sensor.carport_stranger_person_detected
+        - binary_sensor.carport_pet_detected
+        - binary_sensor.carport_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.carport_person_name
+    - platform: state
+      entity_id: image.carport_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.carport_last_event
+      name: "Carport Last Event"
+      unique_id: eufy_carport_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.carport_last_event') }}
+        {% else %}
+        {% set n = states('sensor.carport_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.carport_last_event') }}
+        {% elif trigger.entity_id == 'sensor.carport_person_name' and not named %}
+          {{ states('sensor.carport_last_event') }}
+        {% elif is_state('binary_sensor.carport_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.carport_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.carport_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.carport_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.carport_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Carport"
+        slug: "carport"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.carport_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.carport_motion_detected', 'on') }}"
+        battery: "{{ states('sensor.carport_battery_percentage') }}"
+        wifi: "{{ states('sensor.carport_wifi_signal_level') }}"
+        thumbnail_entity: image.carport_event_image
+
+    - default_entity_id: sensor.carport_last_event_time
+      name: "Carport Last Event Time"
+      unique_id: eufy_carport_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('carport') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.carport_last_event_time') if states('sensor.carport_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.carport_last_event_time') if states('sensor.carport_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.cars_motion_detected
+        - binary_sensor.cars_person_detected
+        - binary_sensor.cars_identity_person_detected
+        - binary_sensor.cars_stranger_person_detected
+        - binary_sensor.cars_pet_detected
+        - binary_sensor.cars_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.cars_person_name
+    - platform: state
+      entity_id: image.cars_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.cars_last_event
+      name: "Cars Last Event"
+      unique_id: eufy_cars_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.cars_last_event') }}
+        {% else %}
+        {% set n = states('sensor.cars_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.cars_last_event') }}
+        {% elif trigger.entity_id == 'sensor.cars_person_name' and not named %}
+          {{ states('sensor.cars_last_event') }}
+        {% elif is_state('binary_sensor.cars_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.cars_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.cars_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.cars_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.cars_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Cars"
+        slug: "cars"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.cars_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.cars_motion_detected', 'on') }}"
+        battery: "{{ 'n/a' }}"
+        wifi: "{{ states('sensor.cars_wifi_signal_level') }}"
+        thumbnail_entity: image.cars_event_image
+
+    - default_entity_id: sensor.cars_last_event_time
+      name: "Cars Last Event Time"
+      unique_id: eufy_cars_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('cars') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.cars_last_event_time') if states('sensor.cars_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.cars_last_event_time') if states('sensor.cars_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.driveway_motion_detected
+        - binary_sensor.driveway_person_detected
+        - binary_sensor.driveway_identity_person_detected
+        - binary_sensor.driveway_stranger_person_detected
+        - binary_sensor.driveway_pet_detected
+        - binary_sensor.driveway_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.driveway_person_name
+    - platform: state
+      entity_id: image.driveway_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.driveway_last_event
+      name: "Driveway Last Event"
+      unique_id: eufy_driveway_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.driveway_last_event') }}
+        {% else %}
+        {% set n = states('sensor.driveway_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.driveway_last_event') }}
+        {% elif trigger.entity_id == 'sensor.driveway_person_name' and not named %}
+          {{ states('sensor.driveway_last_event') }}
+        {% elif is_state('binary_sensor.driveway_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.driveway_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.driveway_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.driveway_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.driveway_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Driveway"
+        slug: "driveway"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.driveway_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.driveway_motion_detected', 'on') }}"
+        battery: "{{ states('sensor.driveway_battery_percentage') }}"
+        wifi: "{{ states('sensor.driveway_wifi_signal_level') }}"
+        thumbnail_entity: image.driveway_event_image
+
+    - default_entity_id: sensor.driveway_last_event_time
+      name: "Driveway Last Event Time"
+      unique_id: eufy_driveway_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('driveway') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.driveway_last_event_time') if states('sensor.driveway_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.driveway_last_event_time') if states('sensor.driveway_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.entrance_motion_detected
+        - binary_sensor.entrance_person_detected
+        - binary_sensor.entrance_identity_person_detected
+        - binary_sensor.entrance_stranger_person_detected
+        - binary_sensor.entrance_pet_detected
+        - binary_sensor.entrance_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.entrance_person_name
+    - platform: state
+      entity_id: image.entrance_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.entrance_last_event
+      name: "Entrance Last Event"
+      unique_id: eufy_entrance_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.entrance_last_event') }}
+        {% else %}
+        {% set n = states('sensor.entrance_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.entrance_last_event') }}
+        {% elif trigger.entity_id == 'sensor.entrance_person_name' and not named %}
+          {{ states('sensor.entrance_last_event') }}
+        {% elif is_state('binary_sensor.entrance_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.entrance_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.entrance_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.entrance_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.entrance_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Entrance"
+        slug: "entrance"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.entrance_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.entrance_motion_detected', 'on') }}"
+        battery: "{{ states('sensor.entrance_battery_percentage') }}"
+        wifi: "{{ states('sensor.entrance_wifi_signal_level') }}"
+        thumbnail_entity: image.entrance_event_image
+
+    - default_entity_id: sensor.entrance_last_event_time
+      name: "Entrance Last Event Time"
+      unique_id: eufy_entrance_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('entrance') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.entrance_last_event_time') if states('sensor.entrance_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.entrance_last_event_time') if states('sensor.entrance_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.front_door_motion_detected
+        - binary_sensor.front_door_person_detected
+        - binary_sensor.front_door_identity_person_detected
+        - binary_sensor.front_door_stranger_person_detected
+        - binary_sensor.front_door_pet_detected
+        - binary_sensor.front_door_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.front_door_person_name
+    - platform: state
+      entity_id: image.front_door_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.front_door_last_event
+      name: "Front Door Last Event"
+      unique_id: eufy_frontdoor_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.front_door_last_event') }}
+        {% else %}
+        {% set n = states('sensor.front_door_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.front_door_last_event') }}
+        {% elif trigger.entity_id == 'sensor.front_door_person_name' and not named %}
+          {{ states('sensor.front_door_last_event') }}
+        {% elif is_state('binary_sensor.front_door_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.front_door_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.front_door_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.front_door_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.front_door_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Front Door"
+        slug: "front_door"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.front_door_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.front_door_motion_detected', 'on') }}"
+        battery: "{{ states('sensor.front_door_battery_percentage') }}"
+        wifi: "{{ states('sensor.front_door_wifi_signal_level') }}"
+        thumbnail_entity: image.front_door_event_image
+
+    - default_entity_id: sensor.front_door_last_event_time
+      name: "Front Door Last Event Time"
+      unique_id: eufy_frontdoor_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('front_door') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.front_door_last_event_time') if states('sensor.front_door_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.front_door_last_event_time') if states('sensor.front_door_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.front_porch_motion_detected
+        - binary_sensor.front_porch_person_detected
+        - binary_sensor.front_porch_identity_person_detected
+        - binary_sensor.front_porch_stranger_person_detected
+        - binary_sensor.front_porch_pet_detected
+        - binary_sensor.front_porch_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.front_porch_person_name
+    - platform: state
+      entity_id: image.front_porch_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.front_porch_last_event
+      name: "Front Porch Last Event"
+      unique_id: eufy_frontporch_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.front_porch_last_event') }}
+        {% else %}
+        {% set n = states('sensor.front_porch_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.front_porch_last_event') }}
+        {% elif trigger.entity_id == 'sensor.front_porch_person_name' and not named %}
+          {{ states('sensor.front_porch_last_event') }}
+        {% elif is_state('binary_sensor.front_porch_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.front_porch_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.front_porch_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.front_porch_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.front_porch_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Front Porch"
+        slug: "front_porch"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.front_porch_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.front_porch_motion_detected', 'on') }}"
+        battery: "{{ states('sensor.front_porch_battery_percentage') }}"
+        wifi: "{{ states('sensor.front_porch_wifi_signal_level') }}"
+        thumbnail_entity: image.front_porch_event_image
+
+    - default_entity_id: sensor.front_porch_last_event_time
+      name: "Front Porch Last Event Time"
+      unique_id: eufy_frontporch_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('front_porch') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.front_porch_last_event_time') if states('sensor.front_porch_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.front_porch_last_event_time') if states('sensor.front_porch_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.front_yard_flc_motion_detected
+        - binary_sensor.front_yard_flc_person_detected
+        - binary_sensor.front_yard_flc_identity_person_detected
+        - binary_sensor.front_yard_flc_stranger_person_detected
+        - binary_sensor.front_yard_flc_pet_detected
+        - binary_sensor.front_yard_flc_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.front_yard_flc_person_name
+    - platform: state
+      entity_id: image.front_yard_flc_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.front_yard_flc_last_event
+      name: "Front Yard FLC Last Event"
+      unique_id: eufy_frontyardflc_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.front_yard_flc_last_event') }}
+        {% else %}
+        {% set n = states('sensor.front_yard_flc_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.front_yard_flc_last_event') }}
+        {% elif trigger.entity_id == 'sensor.front_yard_flc_person_name' and not named %}
+          {{ states('sensor.front_yard_flc_last_event') }}
+        {% elif is_state('binary_sensor.front_yard_flc_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.front_yard_flc_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.front_yard_flc_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.front_yard_flc_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.front_yard_flc_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Front Yard FLC"
+        slug: "front_yard_flc"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.front_yard_flc_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.front_yard_flc_motion_detected', 'on') }}"
+        battery: "{{ 'n/a' }}"
+        wifi: "{{ states('sensor.front_yard_flc_wifi_signal_level') }}"
+        thumbnail_entity: image.front_yard_flc_event_image
+
+    - default_entity_id: sensor.front_yard_flc_last_event_time
+      name: "Front Yard FLC Last Event Time"
+      unique_id: eufy_frontyardflc_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('front_yard_flc') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.front_yard_flc_last_event_time') if states('sensor.front_yard_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.front_yard_flc_last_event_time') if states('sensor.front_yard_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.front_yard_motion_detected
+        - binary_sensor.front_yard_person_detected
+        - binary_sensor.front_yard_identity_person_detected
+        - binary_sensor.front_yard_stranger_person_detected
+        - binary_sensor.front_yard_pet_detected
+        - binary_sensor.front_yard_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.front_yard_person_name
+    - platform: state
+      entity_id: image.front_yard_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.front_yard_last_event
+      name: "Front Yard Last Event"
+      unique_id: eufy_frontyard_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.front_yard_last_event') }}
+        {% else %}
+        {% set n = states('sensor.front_yard_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.front_yard_last_event') }}
+        {% elif trigger.entity_id == 'sensor.front_yard_person_name' and not named %}
+          {{ states('sensor.front_yard_last_event') }}
+        {% elif is_state('binary_sensor.front_yard_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.front_yard_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.front_yard_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.front_yard_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.front_yard_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Front Yard"
+        slug: "front_yard"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.front_yard_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.front_yard_motion_detected', 'on') }}"
+        battery: "{{ states('sensor.front_yard_battery_percentage') }}"
+        wifi: "{{ states('sensor.front_yard_wifi_signal_level') }}"
+        thumbnail_entity: image.front_yard_event_image
+
+    - default_entity_id: sensor.front_yard_last_event_time
+      name: "Front Yard Last Event Time"
+      unique_id: eufy_frontyard_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('front_yard') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.front_yard_last_event_time') if states('sensor.front_yard_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.front_yard_last_event_time') if states('sensor.front_yard_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.garage_flc_motion_detected
+        - binary_sensor.garage_flc_person_detected
+        - binary_sensor.garage_flc_identity_person_detected
+        - binary_sensor.garage_flc_stranger_person_detected
+        - binary_sensor.garage_flc_pet_detected
+        - binary_sensor.garage_flc_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.garage_flc_person_name
+    - platform: state
+      entity_id: image.garage_flc_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.garage_flc_last_event
+      name: "Garage FLC Last Event"
+      unique_id: eufy_garageflc_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.garage_flc_last_event') }}
+        {% else %}
+        {% set n = states('sensor.garage_flc_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.garage_flc_last_event') }}
+        {% elif trigger.entity_id == 'sensor.garage_flc_person_name' and not named %}
+          {{ states('sensor.garage_flc_last_event') }}
+        {% elif is_state('binary_sensor.garage_flc_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.garage_flc_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.garage_flc_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.garage_flc_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.garage_flc_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Garage FLC"
+        slug: "garage_flc"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.garage_flc_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.garage_flc_motion_detected', 'on') }}"
+        battery: "{{ 'n/a' }}"
+        wifi: "{{ states('sensor.garage_flc_wifi_signal_level') }}"
+        thumbnail_entity: image.garage_flc_event_image
+
+    - default_entity_id: sensor.garage_flc_last_event_time
+      name: "Garage FLC Last Event Time"
+      unique_id: eufy_garageflc_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('garage_flc') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.garage_flc_last_event_time') if states('sensor.garage_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.garage_flc_last_event_time') if states('sensor.garage_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.garage_side_flc_motion_detected
+        - binary_sensor.garage_side_flc_person_detected
+        - binary_sensor.garage_side_flc_identity_person_detected
+        - binary_sensor.garage_side_flc_stranger_person_detected
+        - binary_sensor.garage_side_flc_pet_detected
+        - binary_sensor.garage_side_flc_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.garage_side_flc_person_name
+    - platform: state
+      entity_id: image.garage_side_flc_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.garage_side_flc_last_event
+      name: "Garage Side FLC Last Event"
+      unique_id: eufy_garagesideflc_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.garage_side_flc_last_event') }}
+        {% else %}
+        {% set n = states('sensor.garage_side_flc_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.garage_side_flc_last_event') }}
+        {% elif trigger.entity_id == 'sensor.garage_side_flc_person_name' and not named %}
+          {{ states('sensor.garage_side_flc_last_event') }}
+        {% elif is_state('binary_sensor.garage_side_flc_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.garage_side_flc_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.garage_side_flc_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.garage_side_flc_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.garage_side_flc_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Garage Side FLC"
+        slug: "garage_side_flc"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.garage_side_flc_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.garage_side_flc_motion_detected', 'on') }}"
+        battery: "{{ 'n/a' }}"
+        wifi: "{{ states('sensor.garage_side_flc_wifi_signal_level') }}"
+        thumbnail_entity: image.garage_side_flc_event_image
+
+    - default_entity_id: sensor.garage_side_flc_last_event_time
+      name: "Garage Side FLC Last Event Time"
+      unique_id: eufy_garagesideflc_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('garage_side_flc') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.garage_side_flc_last_event_time') if states('sensor.garage_side_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.garage_side_flc_last_event_time') if states('sensor.garage_side_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.side_door_motion_detected
+        - binary_sensor.side_door_person_detected
+        - binary_sensor.side_door_identity_person_detected
+        - binary_sensor.side_door_stranger_person_detected
+        - binary_sensor.side_door_pet_detected
+        - binary_sensor.side_door_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.side_door_person_name
+    - platform: state
+      entity_id: image.side_door_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.side_door_last_event
+      name: "Side Door Last Event"
+      unique_id: eufy_sidedoor_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.side_door_last_event') }}
+        {% else %}
+        {% set n = states('sensor.side_door_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.side_door_last_event') }}
+        {% elif trigger.entity_id == 'sensor.side_door_person_name' and not named %}
+          {{ states('sensor.side_door_last_event') }}
+        {% elif is_state('binary_sensor.side_door_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.side_door_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.side_door_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.side_door_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.side_door_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Side Door"
+        slug: "side_door"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.side_door_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.side_door_motion_detected', 'on') }}"
+        battery: "{{ states('sensor.side_door_battery_percentage') }}"
+        wifi: "{{ states('sensor.side_door_wifi_signal_level') }}"
+        thumbnail_entity: image.side_door_event_image
+
+    - default_entity_id: sensor.side_door_last_event_time
+      name: "Side Door Last Event Time"
+      unique_id: eufy_sidedoor_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('side_door') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.side_door_last_event_time') if states('sensor.side_door_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.side_door_last_event_time') if states('sensor.side_door_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+- trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.walkout_flc_motion_detected
+        - binary_sensor.walkout_flc_person_detected
+        - binary_sensor.walkout_flc_identity_person_detected
+        - binary_sensor.walkout_flc_stranger_person_detected
+        - binary_sensor.walkout_flc_pet_detected
+        - binary_sensor.walkout_flc_vehicle_detected
+      to: "on"
+    - platform: state
+      entity_id: sensor.walkout_flc_person_name
+    - platform: state
+      entity_id: image.walkout_flc_event_image
+      attribute: access_token
+    - platform: event
+      event_type: eufy_snapshot_sync
+  sensor:
+    - default_entity_id: sensor.walkout_flc_last_event
+      name: "Walkout FLC Last Event"
+      unique_id: eufy_walkoutflc_last_event
+      icon: mdi:cctv
+      state: >
+        {% if trigger.platform == 'event' %}
+          {{ states('sensor.walkout_flc_last_event') }}
+        {% else %}
+        {% set n = states('sensor.walkout_flc_person_name') %}
+        {% set named = n not in ['unknown','unavailable','','No Person','Unknown Person','Unknown'] %}
+        {% if trigger.attribute == 'access_token' %}
+          {{ states('sensor.walkout_flc_last_event') }}
+        {% elif trigger.entity_id == 'sensor.walkout_flc_person_name' and not named %}
+          {{ states('sensor.walkout_flc_last_event') }}
+        {% elif is_state('binary_sensor.walkout_flc_identity_person_detected', 'on') and named %}
+          {{ n }}
+        {% elif is_state('binary_sensor.walkout_flc_stranger_person_detected', 'on') %}
+          Stranger
+        {% elif is_state('binary_sensor.walkout_flc_person_detected', 'on') %}
+          {{ n if named else 'Stranger' }}
+        {% elif is_state('binary_sensor.walkout_flc_pet_detected', 'on') %}
+          Pet
+        {% elif is_state('binary_sensor.walkout_flc_vehicle_detected', 'on') %}
+          Vehicle
+        {% else %}
+          Motion
+        {% endif %}
+        {% endif %}
+      attributes:
+        camera: "Walkout FLC"
+        slug: "walkout_flc"
+        event_time: >
+          {% if trigger.attribute == 'access_token' %}
+            {{ states('image.walkout_flc_event_image') }}
+          {% else %}
+            {{ now().isoformat() }}
+          {% endif %}
+        motion_now: "{{ is_state('binary_sensor.walkout_flc_motion_detected', 'on') }}"
+        battery: "{{ 'n/a' }}"
+        wifi: "{{ states('sensor.walkout_flc_wifi_signal_level') }}"
+        thumbnail_entity: image.walkout_flc_event_image
+
+    - default_entity_id: sensor.walkout_flc_last_event_time
+      name: "Walkout FLC Last Event Time"
+      unique_id: eufy_walkoutflc_last_event_time
+      device_class: timestamp
+      icon: mdi:clock-outline
+      state: >
+        {% if trigger.platform == 'event' %}
+          {% set sync_ts = trigger.event.data.get('walkout_flc') %}
+          {% if sync_ts in ['unknown', 'unavailable', ''] %}
+            {{ states('sensor.walkout_flc_last_event_time') if states('sensor.walkout_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+          {% else %}
+            {{ sync_ts }}
+          {% endif %}
+        {% else %}
+          {{ states('sensor.walkout_flc_last_event_time') if states('sensor.walkout_flc_last_event_time') not in ['unknown', 'unavailable', ''] else 'unavailable' }}
+        {% endif %}
+
+# --- from eufy_activity_visibility.yaml (dashboard activity chips) ---
+# Eufy camera activity visibility for dashboard chips
+# Reload: Developer Tools -> YAML -> Template entities
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.side_door_last_event
+        - sensor.side_door_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.side_door_recent_activity
+      name: "Side Door Recent Activity"
+      unique_id: eufy_side_door_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.side_door_last_event') %}
+        {% set ts = states('sensor.side_door_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.side_door_live_motion
+      name: "Side Door Live Motion"
+      unique_id: eufy_side_door_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.side_door_last_event') %}
+        {% set ts = states('sensor.side_door_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.garage_side_flc_last_event
+        - sensor.garage_side_flc_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.garage_side_flc_recent_activity
+      name: "Garage Side FLC Recent Activity"
+      unique_id: eufy_garage_side_flc_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.garage_side_flc_last_event') %}
+        {% set ts = states('sensor.garage_side_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.garage_side_flc_live_motion
+      name: "Garage Side FLC Live Motion"
+      unique_id: eufy_garage_side_flc_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.garage_side_flc_last_event') %}
+        {% set ts = states('sensor.garage_side_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.garage_flc_last_event
+        - sensor.garage_flc_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.garage_flc_recent_activity
+      name: "Garage FLC Recent Activity"
+      unique_id: eufy_garage_flc_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.garage_flc_last_event') %}
+        {% set ts = states('sensor.garage_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.garage_flc_live_motion
+      name: "Garage FLC Live Motion"
+      unique_id: eufy_garage_flc_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.garage_flc_last_event') %}
+        {% set ts = states('sensor.garage_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.front_door_last_event
+        - sensor.front_door_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.front_door_recent_activity
+      name: "Front Door Recent Activity"
+      unique_id: eufy_front_door_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.front_door_last_event') %}
+        {% set ts = states('sensor.front_door_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.front_door_live_motion
+      name: "Front Door Live Motion"
+      unique_id: eufy_front_door_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.front_door_last_event') %}
+        {% set ts = states('sensor.front_door_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.carport_last_event
+        - sensor.carport_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.carport_recent_activity
+      name: "Carport Recent Activity"
+      unique_id: eufy_carport_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.carport_last_event') %}
+        {% set ts = states('sensor.carport_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.carport_live_motion
+      name: "Carport Live Motion"
+      unique_id: eufy_carport_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.carport_last_event') %}
+        {% set ts = states('sensor.carport_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.entrance_last_event
+        - sensor.entrance_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.entrance_recent_activity
+      name: "Entrance Recent Activity"
+      unique_id: eufy_entrance_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.entrance_last_event') %}
+        {% set ts = states('sensor.entrance_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.entrance_live_motion
+      name: "Entrance Live Motion"
+      unique_id: eufy_entrance_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.entrance_last_event') %}
+        {% set ts = states('sensor.entrance_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.back_left_flc_last_event
+        - sensor.back_left_flc_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.back_left_flc_recent_activity
+      name: "Back Left FLC Recent Activity"
+      unique_id: eufy_back_left_flc_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.back_left_flc_last_event') %}
+        {% set ts = states('sensor.back_left_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.back_left_flc_live_motion
+      name: "Back Left FLC Live Motion"
+      unique_id: eufy_back_left_flc_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.back_left_flc_last_event') %}
+        {% set ts = states('sensor.back_left_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.back_yard_last_event
+        - sensor.back_yard_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.back_yard_recent_activity
+      name: "Back Yard Recent Activity"
+      unique_id: eufy_back_yard_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.back_yard_last_event') %}
+        {% set ts = states('sensor.back_yard_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.back_yard_live_motion
+      name: "Back Yard Live Motion"
+      unique_id: eufy_back_yard_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.back_yard_last_event') %}
+        {% set ts = states('sensor.back_yard_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.cars_last_event
+        - sensor.cars_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.cars_recent_activity
+      name: "Cars Recent Activity"
+      unique_id: eufy_cars_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.cars_last_event') %}
+        {% set ts = states('sensor.cars_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.cars_live_motion
+      name: "Cars Live Motion"
+      unique_id: eufy_cars_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.cars_last_event') %}
+        {% set ts = states('sensor.cars_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.driveway_last_event
+        - sensor.driveway_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.driveway_recent_activity
+      name: "Driveway Recent Activity"
+      unique_id: eufy_driveway_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.driveway_last_event') %}
+        {% set ts = states('sensor.driveway_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.driveway_live_motion
+      name: "Driveway Live Motion"
+      unique_id: eufy_driveway_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.driveway_last_event') %}
+        {% set ts = states('sensor.driveway_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.front_porch_last_event
+        - sensor.front_porch_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.front_porch_recent_activity
+      name: "Front Porch Recent Activity"
+      unique_id: eufy_front_porch_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.front_porch_last_event') %}
+        {% set ts = states('sensor.front_porch_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.front_porch_live_motion
+      name: "Front Porch Live Motion"
+      unique_id: eufy_front_porch_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.front_porch_last_event') %}
+        {% set ts = states('sensor.front_porch_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.front_yard_flc_last_event
+        - sensor.front_yard_flc_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.front_yard_flc_recent_activity
+      name: "Front Yard FLC Recent Activity"
+      unique_id: eufy_front_yard_flc_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.front_yard_flc_last_event') %}
+        {% set ts = states('sensor.front_yard_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.front_yard_flc_live_motion
+      name: "Front Yard FLC Live Motion"
+      unique_id: eufy_front_yard_flc_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.front_yard_flc_last_event') %}
+        {% set ts = states('sensor.front_yard_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.front_yard_last_event
+        - sensor.front_yard_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.front_yard_recent_activity
+      name: "Front Yard Recent Activity"
+      unique_id: eufy_front_yard_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.front_yard_last_event') %}
+        {% set ts = states('sensor.front_yard_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.front_yard_live_motion
+      name: "Front Yard Live Motion"
+      unique_id: eufy_front_yard_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.front_yard_last_event') %}
+        {% set ts = states('sensor.front_yard_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
+
+- trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id:
+        - sensor.walkout_flc_last_event
+        - sensor.walkout_flc_last_event_time
+  binary_sensor:
+    - default_entity_id: binary_sensor.walkout_flc_recent_activity
+      name: "Walkout FLC Recent Activity"
+      unique_id: eufy_walkout_flc_recent_activity
+      icon: mdi:motion-sensor
+      state: >
+        {% set ev = states('sensor.walkout_flc_last_event') %}
+        {% set ts = states('sensor.walkout_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 3600 }}
+    - default_entity_id: binary_sensor.walkout_flc_live_motion
+      name: "Walkout FLC Live Motion"
+      unique_id: eufy_walkout_flc_live_motion
+      icon: mdi:record-circle
+      state: >
+        {% set ev = states('sensor.walkout_flc_last_event') %}
+        {% set ts = states('sensor.walkout_flc_last_event_time') %}
+        {{ ev not in ['unknown', 'unavailable', ''] and ts not in ['unknown', 'unavailable', ''] and (as_timestamp(now()) - as_timestamp(ts)) < 300 }}
