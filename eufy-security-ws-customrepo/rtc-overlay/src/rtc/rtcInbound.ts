@@ -330,9 +330,9 @@ function handleNotifyJson(session: RtcInboundSession, channel: number, data: unk
   });
 }
 
-/** Emit immediate command success for T9000 RTC guard mode (hub applies without timely ack). */
-export function shouldOptimisticRtcPropertySuccess(nestedCommandType?: number): boolean {
-  return nestedCommandType === CommandType.CMD_SET_ARMING;
+/** Do not optimistically ack guard mode — HA must reflect hub state, not assume success. */
+export function shouldOptimisticRtcPropertySuccess(_nestedCommandType?: number): boolean {
+  return false;
 }
 
 export function optimisticRtcReturnCode(): number {

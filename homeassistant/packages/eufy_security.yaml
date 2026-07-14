@@ -161,7 +161,7 @@ template:
         slug: "back_left_flc"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.back_left_flc_event_image') }}
+            {{ states('sensor.back_left_flc_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -238,7 +238,7 @@ template:
         slug: "back_yard"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.back_yard_event_image') }}
+            {{ states('sensor.back_yard_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -315,7 +315,7 @@ template:
         slug: "carport"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.carport_event_image') }}
+            {{ states('sensor.carport_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -392,7 +392,7 @@ template:
         slug: "cars"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.cars_event_image') }}
+            {{ states('sensor.cars_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -469,7 +469,7 @@ template:
         slug: "driveway"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.driveway_event_image') }}
+            {{ states('sensor.driveway_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -546,7 +546,7 @@ template:
         slug: "entrance"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.entrance_event_image') }}
+            {{ states('sensor.entrance_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -623,7 +623,7 @@ template:
         slug: "front_door"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.front_door_event_image') }}
+            {{ states('sensor.front_door_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -700,7 +700,7 @@ template:
         slug: "front_porch"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.front_porch_event_image') }}
+            {{ states('sensor.front_porch_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -777,7 +777,7 @@ template:
         slug: "front_yard_flc"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.front_yard_flc_event_image') }}
+            {{ states('sensor.front_yard_flc_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -854,7 +854,7 @@ template:
         slug: "front_yard"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.front_yard_event_image') }}
+            {{ states('sensor.front_yard_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -931,7 +931,7 @@ template:
         slug: "garage_flc"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.garage_flc_event_image') }}
+            {{ states('sensor.garage_flc_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -1008,7 +1008,7 @@ template:
         slug: "garage_side_flc"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.garage_side_flc_event_image') }}
+            {{ states('sensor.garage_side_flc_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -1085,7 +1085,7 @@ template:
         slug: "side_door"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.side_door_event_image') }}
+            {{ states('sensor.side_door_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}
@@ -1162,7 +1162,7 @@ template:
         slug: "walkout_flc"
         event_time: >
           {% if trigger.attribute == 'access_token' %}
-            {{ states('image.walkout_flc_event_image') }}
+            {{ states('sensor.walkout_flc_last_event_time') }}
           {% else %}
             {{ now().isoformat() }}
           {% endif %}

@@ -1936,26 +1936,45 @@ export class Station extends TypedEmitter<StationEvents> {
     }
   }
 
-  /** Hub can keep SCTP alive while command/notify channels stall — detect via missed DB poll responses. */
+  /**
+   * The hub can keep SCTP alive while command/notify channels stall. We detect that via missed
+   * DB-latest poll responses — but only tear the session down when it is genuinely silent. The hub
+   * often answers the poll with a frame we log as an "unmatched command response" (it does not parse
+   * as a DB-latest result and so never clears the watchdog); that is still proof the session is
+   * alive, so recent inbound RTC activity suppresses the reconnect and avoids needless flapping.
+   */
+  private isRtcSessionLive(): boolean {
+    const livenessMs = Number(process.env.RTC_INBOUND_LIVENESS_MS ?? 30_000);
+    return this.p2pSession.rtcInboundIdleMs() < livenessMs;
+  }
+
   private noteRtcPollSent(): void {
     const maxMisses = Number(process.env.RTC_POLL_MAX_MISSES ?? 3);
     const timeoutMs = Number(process.env.RTC_POLL_WATCHDOG_MS ?? 35_000);
     if (this.rtcPollWatchdog !== undefined) {
       this.clearRtcPollWatchdog();
-      this.rtcPollMisses++;
-      rootHTTPLogger.warn("T9000 RTC live poll missed database response", {
-        stationSN: this.getSerial(),
-        misses: this.rtcPollMisses,
-        maxMisses,
-      });
-      if (this.rtcPollMisses >= maxMisses) {
-        this.forceStaleRtcReconnect();
-        return;
+      if (this.isRtcSessionLive()) {
+        this.rtcPollMisses = 0;
+      } else {
+        this.rtcPollMisses++;
+        rootHTTPLogger.warn("T9000 RTC live poll missed database response", {
+          stationSN: this.getSerial(),
+          misses: this.rtcPollMisses,
+          maxMisses,
+        });
+        if (this.rtcPollMisses >= maxMisses) {
+          this.forceStaleRtcReconnect();
+          return;
+        }
       }
     }
     this.rtcPollWatchdog = setTimeout(() => {
       this.rtcPollWatchdog = undefined;
       if (!this.isConnected() || !this.rtcTransport?.isConnected()) {
+        return;
+      }
+      if (this.isRtcSessionLive()) {
+        this.rtcPollMisses = 0;
         return;
       }
       this.rtcPollMisses++;

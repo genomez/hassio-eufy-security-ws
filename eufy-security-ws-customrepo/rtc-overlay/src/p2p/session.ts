@@ -281,6 +281,8 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
   /** T9000 WebRTC command path (replaces UDP P2P when active). */
   private rtcTransport?: RtcCommandTransport;
   private readonly rtcPending = new RtcCommandPending();
+  /** Wall-clock of the last inbound RTC frame — liveness signal for the stale-session watchdog. */
+  private lastRtcInboundAt = 0;
   /** When true, never start legacy UDP P2P — commands wait for WebRTC reconnect. */
   private rtcCommandOnly = false;
 
@@ -674,10 +676,16 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
   }
 
   public handleRtcIncoming(data: Buffer, linkType = 1): void {
+    this.lastRtcInboundAt = Date.now();
     if (this.rtcPending.handleIncoming(data, linkType)) {
       return;
     }
     dispatchRtcInbound(this as unknown as RtcInboundSession, data, linkType);
+  }
+
+  /** Ms since the last inbound RTC frame, or Infinity if none seen yet. */
+  public rtcInboundIdleMs(): number {
+    return this.lastRtcInboundAt === 0 ? Infinity : Date.now() - this.lastRtcInboundAt;
   }
 
   private _startConnectTimeout(): void {
