@@ -99,8 +99,32 @@ if [ -z "${RTC_BIND_ADDRESS:-}" ]; then
     fi
 fi
 
-# T9000: LAN host ICE when HA and HomeBase share a subnet; override with relay if needed.
+# RTC_VERBOSE dumps raw signaling frames + libdatachannel debug (very high volume). Keep off for
+# normal operation, set to 1 only when debugging RTC. NOTE: the T9000 DTLS handshake is timing
+# sensitive — it used to complete only when verbose logging happened to pace the native threads.
+# RTC_HANDSHAKE_PACE_MS now reproduces that pacing deterministically (see rtcPeer.ts), so the
+# handshake is reliable with verbose OFF.
+export RTC_VERBOSE="${RTC_VERBOSE:-0}"
+# Per-message block (ms) applied inside the libdatachannel Debug log callback, but ONLY while a
+# peer is mid-handshake (never during steady-state streaming). This paces the native ICE/DTLS
+# threads just enough for the T9000 DTLS handshake to complete. Set to 0 to disable pacing.
+export RTC_HANDSHAKE_PACE_MS="${RTC_HANDSHAKE_PACE_MS:-0.6}"
+# A failed RTC connect attempt (e.g. a DTLS handshake that loses its timing race under startup
+# load) should retry quickly instead of blocking for the old 3-minute default.
+export RTC_CONNECT_TIMEOUT_MS="${RTC_CONNECT_TIMEOUT_MS:-45000}"
+# T9000 firmware (2026-07) expects the CLIENT to send the SDP offer after scall 100+TURN.
+export RTC_CLIENT_OFFER="${RTC_CLIENT_OFFER:-1}"
+# Send an explicit DTLS role in our offer (the hub can't negotiate from "actpass"): we are
+# active (DTLS client), so the hub must be passive (server). Answer role is coerced to match.
+export RTC_SIGNAL_SETUP="${RTC_SIGNAL_SETUP:-active}"
+export RTC_ANSWER_SETUP="${RTC_ANSWER_SETUP:-passive}"
+# LAN host pair is the only ICE path that connects (relay-only never completes checks).
 export RTC_ICE_POLICY="${RTC_ICE_POLICY:-all}"
+# Skip the Eufy TURN relay entirely (host-only ICE). The relay answers STUN checks so ICE could
+# nominate it, but DTLS never completes over the T9000 relay path — if that pair won the race the
+# handshake stalled ~31s and dropped. With NO_TURN we neither gather a local relay nor accept the
+# hub's remote relay candidate, leaving only the direct LAN host pair that actually carries DTLS.
+export RTC_NO_TURN="${RTC_NO_TURN:-1}"
 export RTC_DELAY_SDP_UNTIL_GATHERING="${RTC_DELAY_SDP_UNTIL_GATHERING:-0}"
 export RTC_POLL_MAX_MISSES="${RTC_POLL_MAX_MISSES:-3}"
 export RTC_POLL_WATCHDOG_MS="${RTC_POLL_WATCHDOG_MS:-35000}"

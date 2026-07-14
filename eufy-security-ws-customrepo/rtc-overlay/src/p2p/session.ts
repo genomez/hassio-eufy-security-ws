@@ -151,6 +151,15 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
   private readonly MAX_GATEWAY_COMMAND_RESULT_WAIT = 5 * 1000;
   private readonly MAX_CONNECTION_TIMEOUT = 25 * 1000;
   private readonly MAX_AKNOWLEDGE_TIMEOUT = 5 * 1000;
+  // Command-ack timeout for the T9000 RTC bridge. The hub's ack for some commands (notably the
+  // floodlight manual switch) can take ~6s on a freshly reconnected session — longer than the
+  // legacy 5s ack window — which made a still-in-flight ack land after the pending command had
+  // already timed out (return code -133), so the confirmed light state never reached HA. Give RTC
+  // acks a generous window; normal acks still resolve in well under a second.
+  private readonly RTC_COMMAND_ACK_TIMEOUT = Math.max(
+    5000,
+    Number(process.env.RTC_COMMAND_ACK_TIMEOUT_MS ?? "12000") || 12000
+  );
   private readonly MAX_LOOKUP_TIMEOUT = 20 * 1000;
   private readonly LOCAL_LOOKUP_RETRY_TIMEOUT = 1 * 1000;
   private readonly LOOKUP_RETRY_TIMEOUT = 1 * 1000;
@@ -1060,7 +1069,7 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
       message.p2pCommand.commandType,
       message.p2pCommand.channel ?? 0,
       message.nestedCommandType,
-      this.MAX_AKNOWLEDGE_TIMEOUT,
+      this.RTC_COMMAND_ACK_TIMEOUT,
       (returnCode, parsed) => {
         const channel = message.p2pCommand.channel ?? 0;
         if (
@@ -1088,6 +1097,22 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
           if (!synced && message.customData?.property?.name === "light") {
             const enabled = message.customData.property.value === true;
             this.emit("floodlight manual switch", channel, enabled);
+          } else if (!synced) {
+            let enabled: boolean | undefined;
+            if (message.nestedCommandType === CommandType.CMD_SET_FLOODLIGHT_MANUAL_SWITCH) {
+              try {
+                const raw = message.p2pCommand.value as string;
+                const json = JSON.parse(raw) as { data?: { value?: number } };
+                if (json.data?.value !== undefined) {
+                  enabled = json.data.value === 1;
+                }
+              } catch {
+                /* ignore */
+              }
+            }
+            if (enabled !== undefined) {
+              this.emit("floodlight manual switch", channel, enabled);
+            }
           }
         }
         this.emit("command", {

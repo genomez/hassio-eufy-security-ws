@@ -25,7 +25,14 @@ export class StationRtcTransport extends EventEmitter {
     private readonly stationSn: string,
     private readonly adminUserId: string,
     private credentials: MegaRtcCredentials,
-    private readonly connectTimeoutMs = 180000
+    // A whole connect attempt (sign → auth → scall → offer/answer → DTLS → data channel) normally
+    // completes in <1s; when it fails, DTLS gives up at ~31s. The old 180s default meant a failed
+    // attempt blocked reconnect for 3 minutes. Cap at 45s (past the DTLS timeout) so a missed
+    // handshake retries promptly. Tunable via RTC_CONNECT_TIMEOUT_MS.
+    private readonly connectTimeoutMs = Math.max(
+      10000,
+      Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? "45000") || 45000
+    )
   ) {
     super();
   }
@@ -139,9 +146,15 @@ export class StationRtcTransport extends EventEmitter {
   }
 
   public close(): void {
+    const wasConnected = this.connected;
     this.connecting = false;
     this.connected = false;
     this.closeSession();
+    // Intentional close() clears connected before the session async "close" handler runs,
+    // so emit here to ensure Station.onRtcDisconnect() and HA connected events fire.
+    if (wasConnected) {
+      this.emit("close");
+    }
   }
 
   private closeSession(): void {

@@ -50,16 +50,49 @@ const DATA_CHANNEL_IDS: Record<string, number> = {
 };
 
 let ndcLoggerInitialized = false;
+// Handshake pacing (see ensureNdcLogger). While > 0, at least one peer is mid-handshake and the
+// libdatachannel Debug log callback blocks briefly per message to pace the native ICE/DTLS threads
+// — reproducing the timing that lets the T9000 DTLS handshake complete without verbose logging.
+let ndcHandshakePacing = 0;
+const ndcPacingSab = new Int32Array(new SharedArrayBuffer(4));
+function ndcBeginHandshakePacing(): void {
+  ndcHandshakePacing++;
+}
+function ndcEndHandshakePacing(): void {
+  if (ndcHandshakePacing > 0) {
+    ndcHandshakePacing--;
+  }
+}
 
 function ensureNdcLogger(): void {
   if (ndcLoggerInitialized) {
     return;
   }
-  if (process.env.RTC_VERBOSE !== "1" && process.env.RTC_VERBOSE !== "true") {
-    return;
-  }
+  // The T9000 DTLS handshake is timing-sensitive. libdatachannel runs ICE/DTLS/SCTP on native
+  // background threads; the Node main thread must yield often enough for them to be serviced or
+  // the DTLS ClientHello/response races ICE pair nomination and the handshake stalls (~31s) then
+  // the peer closes. Empirically DTLS completes (~90ms) only when the "Debug" logger callback runs
+  // per message, because each callback performs a *synchronous write syscall* that yields the event
+  // loop and gives the native threads CPU. A no-op callback does NOT yield and DTLS still stalls.
+  //
+  // So we always register the Debug logger. When RTC_VERBOSE is on we forward to the add-on log
+  // (high volume, for debugging). Otherwise we still perform a cheap synchronous write to /dev/null
+  // per message — this reproduces the event-loop yield that stabilizes the handshake without
+  // flooding the add-on log.
+  const verbose = process.env.RTC_VERBOSE === "1" || process.env.RTC_VERBOSE === "true";
+  // Per-message block (ms) applied only during the handshake phase when verbose is off. Emulates
+  // the pacing that heavy verbose logging incidentally provided. Tunable via RTC_HANDSHAKE_PACE_MS.
+  const paceMs = Math.max(0, Number(process.env.RTC_HANDSHAKE_PACE_MS ?? "0.4") || 0);
   initLogger("Debug", (level, message) => {
-    rootHTTPLogger.info("RtcPeer ldc", { level, message });
+    if (verbose) {
+      rootHTTPLogger.info("RtcPeer ldc", { level, message });
+      return;
+    }
+    if (paceMs > 0 && ndcHandshakePacing > 0) {
+      // Synchronous, non-spinning sleep on a throwaway SharedArrayBuffer — blocks this callback
+      // (and thus paces the native thread that emitted the log) without burning CPU.
+      Atomics.wait(ndcPacingSab, 0, 0, paceMs);
+    }
   });
   ndcLoggerInitialized = true;
 }
@@ -98,6 +131,26 @@ function filterSdpRelayCandidates(sdp: string): string {
   });
   if (stripped > 0) {
     rootHTTPLogger.info("RtcPeer stripped non-relay candidates from remote SDP", { stripped });
+  }
+  return kept.join(eol) + (kept.length > 0 && kept[kept.length - 1] !== "" ? eol : "");
+}
+
+/** Remove any inline non-host ICE candidate lines from an SDP (host-only mode). */
+function stripSdpRelayCandidates(sdp: string): string {
+  const eol = sdp.includes("\r\n") ? "\r\n" : "\n";
+  const lines = sdp.split(/\r?\n/);
+  let stripped = 0;
+  const kept = lines.filter((line) => {
+    if (line.startsWith("a=candidate:") && !line.includes(" typ host ")) {
+      stripped++;
+      return false;
+    }
+    return true;
+  });
+  if (stripped > 0) {
+    rootHTTPLogger.info("RtcPeer stripped non-host candidates from remote SDP (host-only)", {
+      stripped,
+    });
   }
   return kept.join(eol) + (kept.length > 0 && kept[kept.length - 1] !== "" ? eol : "");
 }
@@ -158,6 +211,7 @@ export class RtcPeerConnection extends EventEmitter {
   private commandChannelOpen = false;
   private snapshotTimer?: NodeJS.Timeout;
   private gatheringCompleteEmitted = false;
+  private pacingActive = false;
   private peerOptions: RtcPeerOptions = { iceTransportPolicy: "all", dtlsSetup: "passive" };
   private localRelayCandidateSeen = false;
   private relayCandidateWaiters: Array<() => void> = [];
@@ -168,9 +222,18 @@ export class RtcPeerConnection extends EventEmitter {
     reject: (err: Error) => void;
     timer: NodeJS.Timeout;
   };
+  private localOfferWaiter?: {
+    resolve: (sdp: string) => void;
+    reject: (err: Error) => void;
+    timer: NodeJS.Timeout;
+  };
 
   public async initWithTurn(turn: RtcTurnConfig, opts?: RtcPeerOptions): Promise<void> {
     ensureNdcLogger();
+    if (!this.pacingActive) {
+      this.pacingActive = true;
+      ndcBeginHandshakePacing();
+    }
     if (opts) {
       this.peerOptions = { ...this.peerOptions, ...opts };
     }
@@ -184,18 +247,26 @@ export class RtcPeerConnection extends EventEmitter {
       bindAddress: process.env.RTC_BIND_ADDRESS,
     });
 
-    const iceServers: IceServer[] = [
-      ...turnIceServers(turn.turn_addr, turn.turn_port, turn.turn_user, turn.turn_password),
-    ];
-    if (turn.alt_turn_addr && turn.alt_turn_port) {
+    // The T9000 sits on the LAN and connects over the direct host candidate pair. The Eufy
+    // TURN relay never actually completes connectivity, but gathering it takes ~20s to time
+    // out and races with / stalls the DTLS handshake on the good host pair. Skip TURN entirely
+    // (host-only) unless explicitly re-enabled, so ICE gathering finishes instantly.
+    const noTurn = process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true";
+    const iceServers: IceServer[] = [];
+    if (!noTurn) {
       iceServers.push(
-        ...turnIceServers(
-          turn.alt_turn_addr,
-          turn.alt_turn_port,
-          turn.turn_user,
-          turn.turn_password
-        )
+        ...turnIceServers(turn.turn_addr, turn.turn_port, turn.turn_user, turn.turn_password)
       );
+      if (turn.alt_turn_addr && turn.alt_turn_port) {
+        iceServers.push(
+          ...turnIceServers(
+            turn.alt_turn_addr,
+            turn.alt_turn_port,
+            turn.turn_user,
+            turn.turn_password
+          )
+        );
+      }
     }
 
     const rtcConfig: RtcConfig = {
@@ -219,6 +290,11 @@ export class RtcPeerConnection extends EventEmitter {
         clearTimeout(this.localAnswerWaiter.timer);
         this.localAnswerWaiter.resolve(sdp);
         this.localAnswerWaiter = undefined;
+      }
+      if (t === "offer" && this.localOfferWaiter) {
+        clearTimeout(this.localOfferWaiter.timer);
+        this.localOfferWaiter.resolve(sdp);
+        this.localOfferWaiter = undefined;
       }
     });
 
@@ -260,6 +336,9 @@ export class RtcPeerConnection extends EventEmitter {
       if (state === "connected" && !this.commandChannelOpen) {
         this.startSnapshotWatchdog();
       }
+      if (state === "connected" || state === "failed" || state === "closed") {
+        this.endPacing();
+      }
       if (state === "failed" || state === "closed") {
         this.stopSnapshotWatchdog();
       }
@@ -282,6 +361,78 @@ export class RtcPeerConnection extends EventEmitter {
       });
       this.wireDataChannel(dc.getLabel(), dc);
     });
+  }
+
+  /**
+   * Offerer mode (T9000 2026-07 firmware): create the data channels, which makes
+   * libdatachannel auto-generate a local SDP offer. Returns the offer to signal to the hub.
+   */
+  public async createOffer(): Promise<string> {
+    if (!this.pc) {
+      throw new Error("RtcPeer not initialized");
+    }
+
+    const offerPromise = new Promise<string>((resolve, reject) => {
+      const existing = this.pc?.localDescription();
+      if (existing?.sdp && String(existing.type).toLowerCase() === "offer") {
+        resolve(existing.sdp);
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.localOfferWaiter = undefined;
+        reject(new Error("Timed out waiting for local SDP offer"));
+      }, 15000);
+      this.localOfferWaiter = { resolve, reject, timer };
+    });
+
+    // Creating the first data channel makes libdatachannel auto-generate the local offer
+    // (same mechanism the answerer relies on when setRemoteDescription is called).
+    this.createDataChannels();
+
+    const rawOffer = await offerPromise;
+    const patched = patchAnswerSdp(rawOffer);
+    rootHTTPLogger.info("RtcPeer local SDP offer", sdpHighlights(patched));
+    return patched;
+  }
+
+  /** Offerer mode: apply the hub's SDP answer and flush any queued remote candidates. */
+  public async handleRemoteAnswer(sdpAnswer: string): Promise<void> {
+    if (!this.pc) {
+      throw new Error("RtcPeer not initialized");
+    }
+    let answerSdp = sdpAnswer;
+    if ((this.peerOptions.iceTransportPolicy ?? "relay") === "relay") {
+      answerSdp = filterSdpRelayCandidates(sdpAnswer);
+    } else if (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true") {
+      answerSdp = stripSdpRelayCandidates(sdpAnswer);
+    }
+    // T9000 hub returns "a=setup:actpass" in its answer, which is illegal in an SDP answer
+    // (libdatachannel rejects it). Coerce to a concrete DTLS role. Default "passive" makes the
+    // hub the DTLS server and us the DTLS client (active) — we initiate the handshake out
+    // through TURN, which completes DTLS reliably. Override with RTC_ANSWER_SETUP=active.
+    if (/a=setup:actpass/.test(answerSdp)) {
+      const answerRole = process.env.RTC_ANSWER_SETUP?.toLowerCase() === "active" ? "active" : "passive";
+      answerSdp = answerSdp.replace(/a=setup:actpass/g, `a=setup:${answerRole}`);
+      rootHTTPLogger.info("RtcPeer coerced answer DTLS role", { from: "actpass", to: answerRole });
+    }
+    rootHTTPLogger.info("RtcPeer remote SDP answer", sdpHighlights(answerSdp));
+    this.pc.setRemoteDescription(answerSdp, "answer");
+    this.remoteDescriptionSet = true;
+    rootHTTPLogger.info("RtcPeer setRemoteDescription(answer) ok", {
+      signalingState: this.pc.signalingState(),
+    });
+    try {
+      const fp = this.pc.remoteFingerprint();
+      rootHTTPLogger.info("RtcPeer remoteFingerprint", {
+        algorithm: fp.algorithm,
+        value: fp.value?.slice(0, 20),
+      });
+    } catch {
+      /* optional */
+    }
+    await this.flushPendingCandidates();
+    this.startSnapshotWatchdog();
+    this.logSnapshot("remoteAnswerApplied");
   }
 
   public async handleRemoteOffer(sdpOffer: string): Promise<string> {
@@ -365,8 +516,9 @@ export class RtcPeerConnection extends EventEmitter {
       return;
     }
     if (!this.shouldAcceptRemoteCandidate(candidate)) {
-      rootHTTPLogger.info("RtcPeer ignoring remote ICE candidate (relay-only policy)", {
+      rootHTTPLogger.info("RtcPeer ignoring remote ICE candidate (ICE policy filter)", {
         summary: iceCandidateSummary(candidate),
+        iceTransportPolicy: this.peerOptions.iceTransportPolicy,
       });
       return;
     }
@@ -440,16 +592,29 @@ export class RtcPeerConnection extends EventEmitter {
       clearTimeout(this.localAnswerWaiter.timer);
       this.localAnswerWaiter = undefined;
     }
+    if (this.localOfferWaiter) {
+      clearTimeout(this.localOfferWaiter.timer);
+      this.localOfferWaiter = undefined;
+    }
     this.commandChannelOpen = false;
     this.gatheringCompleteEmitted = false;
     this.localRelayCandidateSeen = false;
     this.relayCandidateWaiters = [];
+    this.endPacing();
     this.pc?.close();
     this.pc = undefined;
     this.dataChannels.clear();
     this.channelsCreated = false;
     this.remoteDescriptionSet = false;
     this.pendingCandidates = [];
+  }
+
+  /** Release this peer's handshake-pacing hold on the shared libdatachannel log callback. */
+  private endPacing(): void {
+    if (this.pacingActive) {
+      this.pacingActive = false;
+      ndcEndHandshakePacing();
+    }
   }
 
   private createDataChannels(): void {
@@ -680,10 +845,21 @@ export class RtcPeerConnection extends EventEmitter {
   }
 
   private shouldAcceptRemoteCandidate(candidate: string): boolean {
-    if ((this.peerOptions.iceTransportPolicy ?? "relay") !== "relay") {
-      return true;
+    if ((this.peerOptions.iceTransportPolicy ?? "relay") === "relay") {
+      return iceCandidateType(candidate) === "relay";
     }
-    return iceCandidateType(candidate) === "relay";
+    // Host-only mode (RTC_NO_TURN): accept ONLY host-type remote candidates. Both devices are on
+    // the LAN, so the direct host pair (e.g. 192.168.50.x) is the only path that actually carries
+    // DTLS/SCTP. The hub also offers a TURN relay candidate and a server-reflexive (srflx) public
+    // candidate; both can pass STUN connectivity checks (so ICE may *nominate* them) yet neither
+    // completes the DTLS handshake — if one wins the nomination race the ClientHello is black-holed
+    // and the handshake stalls ~31s then drops. Restricting to host candidates removes that race so
+    // ICE deterministically settles on the working direct LAN pair.
+    const noTurn = process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true";
+    if (noTurn && iceCandidateType(candidate) !== "host") {
+      return false;
+    }
+    return true;
   }
 
   private async flushPendingCandidates(): Promise<void> {

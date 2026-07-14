@@ -47,6 +47,11 @@ export class RtcSession extends EventEmitter {
   private connectedAt?: number;
   private closed = false;
   private sdpHandled = false;
+  // T9000 2026-07 firmware: the hub grants TURN (scall 100) then waits for the CLIENT
+  // to send the SDP offer. When enabled we offer first and treat the hub reply as an answer.
+  private readonly isOfferer =
+    process.env.RTC_CLIENT_OFFER === "1" || process.env.RTC_CLIENT_OFFER === "true";
+  private clientOfferSent = false;
   private messageChain: Promise<void> = Promise.resolve();
   private signalingKeepaliveTimer?: NodeJS.Timeout;
   private readonly signalingKeepaliveMs = 25_000;
@@ -94,6 +99,16 @@ export class RtcSession extends EventEmitter {
       }
     });
     this.peer.on("error", (err) => this.emit("error", err));
+    this.peer.on("connectionState", (state) => {
+      // Propagate a dropped peer connection immediately so Station reconnects fast, instead of
+      // waiting ~80s for the live-poll watchdog to notice (SCTP/ICE can drop after ~1 min).
+      if ((state === "failed" || state === "closed") && !this.closed && this.connected) {
+        rootHTTPLogger.info("RtcSession peer connection lost — signaling close", { state });
+        this.connected = false;
+        this.stopSignalingKeepalive();
+        this.emit("close");
+      }
+    });
     this.peer.on("data", (label, data, linkType) => {
       if (label === "WebrtcDataChannel") {
         this.emit("commandData", data, linkType ?? 1);
@@ -170,6 +185,16 @@ export class RtcSession extends EventEmitter {
       return;
     }
 
+    if (process.env.RTC_VERBOSE === "1" || process.env.RTC_VERBOSE === "true") {
+      rootHTTPLogger.info("RtcSession RAW signaling frame", {
+        dataType: inner.dataType,
+        action: inner.action,
+        code: inner.code,
+        payloadKeys: Object.keys(payload),
+        raw: inner.data.length > 4000 ? `${inner.data.slice(0, 4000)}…(${inner.data.length})` : inner.data,
+      });
+    }
+
     const dataType = inner.dataType;
     if (dataType !== "scall" && dataType !== "call") {
       rootHTTPLogger.info("RtcSession signaling message", {
@@ -204,6 +229,20 @@ export class RtcSession extends EventEmitter {
       this.turn = payload.turn;
       this.emit("turn", payload.turn);
       await this.peer.initWithTurn(payload.turn, this.resolvePeerOptions());
+      if (this.isOfferer && !this.clientOfferSent) {
+        this.clientOfferSent = true;
+        try {
+          const offerSdp = await this.peer.createOffer();
+          const scallJson = this.peer.getCommandChannelScallJson(offerSdp);
+          this.signaling.sendInfoSdp(scallJson, this.channelId);
+          rootHTTPLogger.info("RtcSession sent client SDP offer", { len: offerSdp.length });
+        } catch (err) {
+          this.clientOfferSent = false;
+          rootHTTPLogger.warn("RtcSession client offer failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     } else if (status === 200) {
       this.signaling.sendAck(this.channelId);
     } else if (status === 486 || status === 408) {
@@ -219,6 +258,7 @@ export class RtcSession extends EventEmitter {
       }
       this.peer.close();
       this.sdpHandled = false;
+      this.clientOfferSent = false;
       this.turn = undefined;
       this.connected = false;
       const waitMs = Math.min(5000 + this.rtc408Retries * 5000, 30000);
@@ -283,11 +323,18 @@ export class RtcSession extends EventEmitter {
         sdpOffer = sdpPayload;
       }
 
-      rootHTTPLogger.info("RtcSession received SDP offer", { len: sdpOffer.length });
       if (!this.turn) {
         rootHTTPLogger.warn("RtcSession SDP before TURN — waiting");
       }
 
+      if (this.isOfferer) {
+        // We offered; this remote SDP is the hub's answer.
+        rootHTTPLogger.info("RtcSession received SDP answer", { len: sdpOffer.length });
+        await this.peer.handleRemoteAnswer(sdpOffer);
+        return;
+      }
+
+      rootHTTPLogger.info("RtcSession received SDP offer", { len: sdpOffer.length });
       const answerSdp = await this.peer.handleRemoteOffer(sdpOffer);
       let sendSdp = answerSdp;
       if (process.env.RTC_DELAY_SDP_UNTIL_GATHERING === "1") {

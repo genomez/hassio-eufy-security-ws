@@ -64,9 +64,19 @@ function dispatchPortalRtcInbound(session: RtcInboundSession, buf: Buffer, linkT
   const header = parsePortalHeader(buf);
 
   // Portal special case: floodlight manual switch binary ack (commandID 1400, 20-byte packet).
+  // Only trust command-channel responses; notify channel (linkType 3) 20-byte frames are echoes.
   if (header.commandID === CommandType.CMD_SET_FLOODLIGHT_MANUAL_SWITCH && buf.length === 20) {
+    if (linkType !== 1 || header.isResponse !== 1) {
+      rootP2PLogger.debug("RtcInbound floodlight 20-byte ignored", {
+        stationSN: session.getStationSn(),
+        channel: header.channelID,
+        linkType,
+        isResponse: header.isResponse,
+      });
+      return;
+    }
     const body = buf.subarray(16);
-    const enabled = body.length > 0 && body.readUIntBE(0, 1) === 1;
+    const enabled = body.length >= 4 && body.readUInt32LE(0) === 1;
     rootP2PLogger.info("RtcInbound floodlight manual switch", {
       stationSN: session.getStationSn(),
       channel: header.channelID,
@@ -166,13 +176,21 @@ function handleLateCommandResponse(
       const value = nested?.data?.value;
       if (value !== undefined) {
         const enabled = value === 1;
-        rootP2PLogger.info("RtcInbound late floodlight ack (1700)", {
-          stationSN: session.getStationSn(),
-          channel,
-          enabled,
-          segmen: parsed.segmen,
-        });
-        session.emit("floodlight manual switch", channel, enabled);
+        if (!enabled) {
+          rootP2PLogger.info("RtcInbound late floodlight ack (1700)", {
+            stationSN: session.getStationSn(),
+            channel,
+            enabled,
+            segmen: parsed.segmen,
+          });
+          session.emit("floodlight manual switch", channel, enabled);
+        } else {
+          rootP2PLogger.debug("RtcInbound late floodlight ack ON ignored (1700)", {
+            stationSN: session.getStationSn(),
+            channel,
+            segmen: parsed.segmen,
+          });
+        }
         return true;
       }
     }
@@ -182,13 +200,21 @@ function handleLateCommandResponse(
     const body = parsed.data as { value?: number } | undefined;
     if (body?.value !== undefined) {
       const enabled = body.value === 1;
-      rootP2PLogger.info("RtcInbound late floodlight ack (1400)", {
-        stationSN: session.getStationSn(),
-        channel,
-        enabled,
-        segmen: parsed.segmen,
-      });
-      session.emit("floodlight manual switch", channel, enabled);
+      if (!enabled) {
+        rootP2PLogger.info("RtcInbound late floodlight ack (1400)", {
+          stationSN: session.getStationSn(),
+          channel,
+          enabled,
+          segmen: parsed.segmen,
+        });
+        session.emit("floodlight manual switch", channel, enabled);
+      } else {
+        rootP2PLogger.debug("RtcInbound late floodlight ack ON ignored (1400)", {
+          stationSN: session.getStationSn(),
+          channel,
+          segmen: parsed.segmen,
+        });
+      }
       return true;
     }
   }
@@ -274,11 +300,19 @@ function handleNotifyJson(session: RtcInboundSession, channel: number, data: unk
   }
 
   // Nested command notify with return code (e.g. 1700/1400 floodlight result).
+  // Notify-channel ON is often stale after reconnect; trust OFF and command responses.
   if (cmd === CommandType.CMD_SET_FLOODLIGHT_MANUAL_SWITCH) {
     const payload = json.payload as { data?: { value?: number } } | undefined;
     const value = payload?.data?.value;
     if (value !== undefined) {
       const enabled = value === 1;
+      if (enabled) {
+        rootP2PLogger.debug("RtcInbound floodlight notify ON ignored", {
+          stationSN: session.getStationSn(),
+          channel,
+        });
+        return;
+      }
       rootP2PLogger.info("RtcInbound floodlight notify payload", {
         stationSN: session.getStationSn(),
         channel,

@@ -1,5 +1,5 @@
 import { TypedEmitter } from "tiny-typed-emitter";
-import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import * as path from "path";
 import * as util from "util";
 import { Readable } from "stream";
@@ -154,6 +154,23 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
   private pendingImageFiles = new Map<string, string>();
   /** Last light on/off intent per device — replayed after T9000 WebRTC reconnect. */
   private pendingDeviceLightBySerial = new Map<string, boolean>();
+  /**
+   * Last add-on-confirmed floodlight (manual-switch, param 1400) state per device serial,
+   * persisted to disk. The Eufy cloud device list reports a stale value for this param (local
+   * HA -> P2P toggles never propagate back to the cloud) and there is no reliable RTC pull-query
+   * for it, so on every add-on restart the device would otherwise re-initialize from the stale
+   * cloud value and push a wrong state to HA. We restore this confirmed value on device ready.
+   */
+  private deviceLightState = new Map<string, boolean>();
+  private deviceLightStateFile!: string;
+  /**
+   * Per-device last event-image capture time (UTC ISO), published to a Home Assistant
+   * shared folder so the dashboard "last event" sync can read it WITHOUT `docker exec`
+   * (HA Core has no Docker access). Updated whenever the add-on caches a freshly
+   * downloaded event image or restores one on startup. See sync_eufy_snapshot_times.py.
+   */
+  private snapshotTimes = new Map<string, string>();
+  private readonly snapshotTimesFile = "/share/eufy/snapshot_times.json";
   private persistentData: EufySecurityPersistentData = {
     country: "",
     openudid: "",
@@ -271,6 +288,11 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     }
 
     rootMainLogger.debug("Loaded persistent data", { persistentData: this.persistentData });
+
+    this.deviceLightStateFile = path.join(this.config.persistentDir, "device_light_state.json");
+    this.loadDeviceLightState();
+    this.loadSnapshotTimes();
+
     try {
       if (this.persistentData.version !== libVersion) {
         const currentVersion = Number.parseFloat(removeLastChar(libVersion, "."));
@@ -1649,6 +1671,96 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     } catch (err) {
       const error = ensureError(err);
       rootMainLogger.error("WritePersistentData Error", { error: getError(error) });
+    }
+  }
+
+  private loadDeviceLightState(): void {
+    try {
+      if (statSync(this.deviceLightStateFile).isFile()) {
+        const raw = JSON.parse(readFileSync(this.deviceLightStateFile, "utf8")) as Record<string, unknown>;
+        for (const [serial, value] of Object.entries(raw)) {
+          if (typeof value === "boolean") {
+            this.deviceLightState.set(serial, value);
+          }
+        }
+        rootMainLogger.debug("Loaded persisted device light state", {
+          entries: Object.fromEntries(this.deviceLightState),
+        });
+      }
+    } catch (err) {
+      const error = ensureError(err);
+      rootMainLogger.debug("No persisted device light state found", { error: getError(error) });
+    }
+  }
+
+  private saveDeviceLightState(serial: string, value: boolean): void {
+    if (this.deviceLightState.get(serial) === value) {
+      return;
+    }
+    this.deviceLightState.set(serial, value);
+    try {
+      writeFileSync(this.deviceLightStateFile, JSON.stringify(Object.fromEntries(this.deviceLightState)));
+      rootMainLogger.debug("Persisted device light state", { deviceSN: serial, value });
+    } catch (err) {
+      const error = ensureError(err);
+      rootMainLogger.error("Save device light state error", { error: getError(error), deviceSN: serial, value });
+    }
+  }
+
+  private loadSnapshotTimes(): void {
+    try {
+      if (statSync(this.snapshotTimesFile).isFile()) {
+        const raw = JSON.parse(readFileSync(this.snapshotTimesFile, "utf8")) as Record<string, unknown>;
+        for (const [serial, value] of Object.entries(raw)) {
+          if (typeof value === "string" && value !== "") {
+            this.snapshotTimes.set(serial, value);
+          }
+        }
+        rootMainLogger.debug("Loaded published snapshot times", { entries: this.snapshotTimes.size });
+      }
+    } catch (err) {
+      const error = ensureError(err);
+      rootMainLogger.debug("No published snapshot times found", { error: getError(error) });
+    }
+  }
+
+  /**
+   * Convert an event-image filename's embedded YYYYMMDDHHMMSS to a *naive* ISO string
+   * (no timezone offset). The digits are the station's local wall-clock time, but this
+   * container runs in UTC and does not know the site timezone, so we publish the naive
+   * value and let the sync (which runs in HA Core and can read HA's configured
+   * time_zone) localize it. See sync_eufy_snapshot_times.py.
+   */
+  private captureIsoFromFile(file: string): string | undefined {
+    const match = file.match(/(\d{14})_/);
+    if (!match) {
+      return undefined;
+    }
+    const s = match[1];
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T${s.slice(8, 10)}:${s.slice(10, 12)}:${s.slice(12, 14)}`;
+  }
+
+  /**
+   * Publish the capture time of a device's latest event image to the HA shared folder.
+   * Only advances forward so a startup cache-restore never regresses a fresher value.
+   */
+  private publishSnapshotTime(serial: string, file: string): void {
+    const iso = this.captureIsoFromFile(file);
+    if (!iso) {
+      return;
+    }
+    const previous = this.snapshotTimes.get(serial);
+    if (previous !== undefined && previous >= iso) {
+      return;
+    }
+    this.snapshotTimes.set(serial, iso);
+    try {
+      mkdirSync(path.dirname(this.snapshotTimesFile), { recursive: true });
+      writeFileSync(this.snapshotTimesFile, JSON.stringify(Object.fromEntries(this.snapshotTimes)));
+      rootMainLogger.debug("Published snapshot time", { deviceSN: serial, capture: iso });
+    } catch (err) {
+      const error = ensureError(err);
+      rootMainLogger.debug("Publish snapshot time error", { error: getError(error), deviceSN: serial, capture: iso });
     }
   }
 
@@ -3068,6 +3180,11 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
       if (ready && !name.startsWith("hidden-")) {
         this.emit("device property changed", device, name, value);
       }
+      // Persist confirmed floodlight (manual-switch) state so it survives an add-on restart and
+      // overrides the stale value the Eufy cloud reports for this param on next startup.
+      if (ready && name === PropertyName.DeviceLight && typeof value === "boolean") {
+        this.saveDeviceLightState(device.getSerial(), value);
+      }
       if (
         name === PropertyName.DeviceRTSPStream &&
         (value as boolean) === true &&
@@ -3228,6 +3345,34 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
   }
 
   private onDeviceReady(device: Device): void {
+    try {
+      // Restore the last add-on-confirmed floodlight state. On a fresh start the device
+      // initializes param 1400 from the Eufy cloud device list (source "http"), which is stale
+      // for this manual-switch value. Re-applying our persisted value with source "p2p" both
+      // corrects HA immediately and — via isPrioritySourceType — prevents later cloud (http)
+      // refreshes from clobbering it back to the stale value.
+      if (device.hasProperty(PropertyName.DeviceLight)) {
+        const persisted = this.deviceLightState.get(device.getSerial());
+        if (persisted !== undefined) {
+          const current = device.getPropertyValue(PropertyName.DeviceLight) as boolean | undefined;
+          if (current !== persisted) {
+            const metadataLight = device.getPropertyMetadata(PropertyName.DeviceLight);
+            rootMainLogger.info("Restoring persisted floodlight state on device ready", {
+              deviceSN: device.getSerial(),
+              persisted,
+              current,
+            });
+            device.updateRawProperty(metadataLight.key as number, persisted ? "1" : "0", "p2p");
+          }
+        }
+      }
+    } catch (err) {
+      const error = ensureError(err);
+      rootMainLogger.error(`Device ready error - restore floodlight state`, {
+        error: getError(error),
+        deviceSN: device.getSerial(),
+      });
+    }
     try {
       if (
         device.getPropertyValue(PropertyName.DeviceRTSPStream) !== undefined &&
@@ -3967,6 +4112,7 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     }
     device.updateProperty(PropertyName.DevicePicture, picture, true);
     this.eventImageCache?.save(device.getSerial(), file, picture);
+    this.publishSnapshotTime(device.getSerial(), file);
     this.pendingImageFiles.delete(file);
   }
 
@@ -3989,6 +4135,7 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
       device.updateProperty(PropertyName.DevicePictureUrl, cached.file, true);
     }
     device.updateProperty(PropertyName.DevicePicture, cached.picture, true);
+    this.publishSnapshotTime(device.getSerial(), cached.file);
     rootMainLogger.info("Restored cached event image", {
       deviceSN: device.getSerial(),
       file: cached.file,
