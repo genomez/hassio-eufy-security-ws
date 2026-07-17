@@ -37,6 +37,7 @@ Upstream-style add-on from **bropat**’s lineage (stock npm client). Included f
 2. Add `https://github.com/genomez/hassio-eufy-security-ws`
 3. Install **eufy-security-ws-customrepo**
 4. Follow [T9000-SETUP.md](T9000-SETUP.md) for configuration and the HACS integration
+5. Optional HA glue + RTC reliability notes: [homeassistant/README.md](homeassistant/README.md)
 
 ## Issues
 

@@ -89,3 +89,77 @@ No timezone edits are needed — the sync reads HA's configured `time_zone` at r
   ON. Remove it (and drop it from the automations/shell_command) if you don't want it.
 - If you previously wired these via `configuration.yaml`/`automations.yaml` +
   `eufy_templates/`, use the package **instead** to avoid duplicate `unique_id`s.
+
+## T9000 / RTC reliability patterns (sanitized)
+
+HomeBase Professional S1 (T9000) talks to HA over **local WebRTC**. The integration
+often updates entities **optimistically** (HA shows the commanded state before the hub
+acks). That can leave Guard Mode or floodlight lights wrong in HA even when the physical
+device did not change.
+
+These patterns are **generic recommendations** — rewrite entity IDs for your station and
+cameras. Do not copy site-specific deploy scripts from private configs.
+
+### 1. Prefer a debounced “connected” sensor
+
+Raw `binary_sensor.<station>_connected` can flap for ~1–2 seconds during normal RTC
+session refresh. Drive automations from a template binary sensor that requires `on`/`off`
+for ~60 seconds before changing (a “stable connected” helper).
+
+### 2. Verify Guard Mode changes
+
+After `select.select_option` on the station guard-mode entity, **wait and re-check** a
+second signal (usually `alarm_control_panel.<station>`) for the expected armed state.
+Retry a few times if the panel never confirms. Do not trust the select entity alone.
+
+Example shape (placeholders only):
+
+```yaml
+sequence:
+  - repeat:
+      count: 3
+      sequence:
+        - action: select.select_option
+          target:
+            entity_id: select.<station>_guard_mode
+          data:
+            option: Away   # or Home / your mode name
+        - delay:
+            seconds: 20
+        - if:
+            - condition: state
+              entity_id: alarm_control_panel.<station>
+              state: armed_away
+          then:
+            - stop: Hub confirmed Away
+```
+
+### 3. Verify floodlight (FLC) on/off
+
+Same class of bug: HA can show `light.<cam>_flc_light` **off** while the lamp stays on.
+For schedule / safety turn-offs:
+
+1. Wait until stable connected is `on` (with a timeout).
+2. Send `light.turn_off` and the matching `switch.*_flc_light` (names vary by camera).
+3. Wait ~15s, optionally `homeassistant.update_entity`, then **send off again**.
+4. Prefer **at least two off pulses** even if HA already reports `off` — optimistic
+   state must not skip the hub command.
+5. Log or notify if the light is still `on` after the last attempt.
+
+Turn-on can stop early once HA reports `on`; turn-off should not.
+
+### 4. Self-heal carefully
+
+Restarting the add-on can recover a wedged RTC session, but:
+
+- Trigger on **prolonged** stable-disconnect or clear failure signals — not on every
+  brief raw flap.
+- Debounce self-heal (e.g. not more than once every several minutes).
+- Use a cooldown after supervisor rebuild/update so restart loops do not fight the
+  supervisor.
+
+### 5. What not to put in a public repo
+
+Long-lived tokens, notify device IDs, person entity names, LAN IPs, and fully wired
+home automations belong in **private** config. Publish patterns and example shapes
+only, with `<station>` / `<cam>` placeholders.

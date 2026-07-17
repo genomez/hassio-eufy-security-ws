@@ -35,6 +35,11 @@ import { portalPacketFromP2PMessage, RtcCommandPending, RtcCommandTransport } fr
 import { dispatchRtcInbound, shouldOptimisticRtcPropertySuccess, optimisticRtcReturnCode, RtcInboundSession, applyFloodlightStateFromAck } from "../rtc/rtcInbound";
 import { dispatchPortalDatabaseInbound, StationDatabaseInboundSession } from "../rtc/stationDatabaseInbound";
 import {
+  RtcInboundDiagEntry,
+  RtcInboundDiagnostics,
+  RtcInboundDiagnosticsSnapshot,
+} from "../rtc/rtcInboundDiagnostics";
+import {
   sendMessage,
   hasHeader,
   buildCheckCamPayload,
@@ -283,6 +288,16 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
   private readonly rtcPending = new RtcCommandPending();
   /** Wall-clock of the last inbound RTC frame — liveness signal for the stale-session watchdog. */
   private lastRtcInboundAt = 0;
+  private readonly rtcInboundDiagnostics = new RtcInboundDiagnostics();
+  private rtcPollAckListener?: (commandID: number, errCode: number) => void;
+
+  public setRtcPollAckListener(listener: (commandID: number, errCode: number) => void): void {
+    this.rtcPollAckListener = listener;
+  }
+
+  public notifyRtcPollAck(commandID: number, errCode: number): void {
+    this.rtcPollAckListener?.(commandID, errCode);
+  }
   /** When true, never start legacy UDP P2P — commands wait for WebRTC reconnect. */
   private rtcCommandOnly = false;
 
@@ -676,8 +691,12 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
   }
 
   public handleRtcIncoming(data: Buffer, linkType = 1): void {
-    this.lastRtcInboundAt = Date.now();
+    const at = Date.now();
+    this.lastRtcInboundAt = at;
+    this.rtcInboundDiagnostics.noteInbound(at);
     if (this.rtcPending.handleIncoming(data, linkType)) {
+      this.rtcInboundDiagnostics.record({ kind: "pending_match", linkType, bytes: data.length }, at);
+      this.notifyRtcPollAck(0, 0);
       return;
     }
     dispatchRtcInbound(this as unknown as RtcInboundSession, data, linkType);
@@ -686,6 +705,18 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
   /** Ms since the last inbound RTC frame, or Infinity if none seen yet. */
   public rtcInboundIdleMs(): number {
     return this.lastRtcInboundAt === 0 ? Infinity : Date.now() - this.lastRtcInboundAt;
+  }
+
+  public resetRtcInboundDiagnostics(): void {
+    this.rtcInboundDiagnostics.reset();
+  }
+
+  public recordRtcInboundDiagnostic(entry: RtcInboundDiagEntry): void {
+    this.rtcInboundDiagnostics.record(entry);
+  }
+
+  public getRtcInboundDiagnostics(): RtcInboundDiagnosticsSnapshot {
+    return this.rtcInboundDiagnostics.snapshot();
   }
 
   private _startConnectTimeout(): void {

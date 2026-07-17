@@ -21,6 +21,7 @@ import {
 } from "../p2p/interfaces";
 import { CommandType } from "../p2p/types";
 import { PortalCommandResponse } from "./rtcPacket";
+import { RtcInboundDiagEntry } from "./rtcInboundDiagnostics";
 
 export interface StationDatabaseInboundSession {
   getStationSn(): string;
@@ -30,6 +31,7 @@ export interface StationDatabaseInboundSession {
   emit(event: "database count by date", returnCode: number, data: Array<DatabaseCountByDate>): boolean;
   emit(event: "database delete", returnCode: number, failedIds: Array<unknown>): boolean;
   emit(event: "image download", file: string, image: Buffer): boolean;
+  recordRtcInboundDiagnostic?(entry: RtcInboundDiagEntry): void;
 }
 
 function normalizeInboundJson(data: unknown): unknown {
@@ -53,9 +55,25 @@ function extractDatabaseResponse(data: unknown): P2PDatabaseResponse | null {
     if (payload.mIntRet !== undefined && payload.cmd !== undefined) {
       return payload as unknown as P2PDatabaseResponse;
     }
+    const nested = extractDatabaseResponse(payload);
+    if (nested) {
+      return nested;
+    }
   }
-  if (Number(obj.cmd) === CommandType.CMD_DATABASE && typeof obj.data !== "undefined") {
-    return obj as unknown as P2PDatabaseResponse;
+  if (Number(obj.cmd) === CommandType.CMD_DATABASE) {
+    if (typeof obj.data !== "undefined") {
+      return obj as unknown as P2PDatabaseResponse;
+    }
+    if (typeof obj.payload === "object" && obj.payload !== null) {
+      const wrapped = {
+        ...(obj.payload as object),
+        cmd: (obj.payload as Record<string, unknown>).cmd ?? CommandType.CMD_DATABASE_QUERY_LATEST_INFO,
+      };
+      const nested = extractDatabaseResponse(wrapped);
+      if (nested) {
+        return nested;
+      }
+    }
   }
   return null;
 }
@@ -113,6 +131,7 @@ export function handleStationDatabaseResponse(
           returnCode: databaseResponse.mIntRet,
           devices: result.length,
         });
+        session.recordRtcInboundDiagnostic?.({ kind: "db_latest", commandID: databaseResponse.cmd });
         session.emit("database query latest", databaseResponse.mIntRet, result);
         return true;
       }
@@ -337,6 +356,22 @@ export function dispatchPortalDatabaseInbound(
   const database = extractDatabaseResponse(data);
   if (database) {
     return handleStationDatabaseResponse(session, database);
+  }
+
+  if (topCommand === CommandType.CMD_SET_PAYLOAD) {
+    const wrapped = extractDatabaseResponse({ payload: data });
+    if (wrapped) {
+      return handleStationDatabaseResponse(session, wrapped);
+    }
+    rootP2PLogger.debug("RtcDatabase CMD_SET_PAYLOAD response did not parse as database", {
+      stationSN: session.getStationSn(),
+      dataType: typeof data,
+    });
+    session.recordRtcInboundDiagnostic?.({
+      kind: "db_parse_fail",
+      commandID: topCommand,
+      detail: `dataType=${typeof data}`,
+    });
   }
 
   if (topCommand === CommandType.CMD_DATABASE) {

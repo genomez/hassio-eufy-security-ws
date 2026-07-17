@@ -30,10 +30,9 @@ automation:
   - delay:
       seconds: 45
   - action: shell_command.eufy_sync_snapshot_times
-  - action: shell_command.eufy_sync_flc_stale_lights
   mode: single
 - id: 'eufy_reconnect_resync'
-  alias: 'Eufy: resync snapshot times and FLC lights after reconnect'
+  alias: 'Eufy: resync snapshot times after reconnect'
   triggers:
   - trigger: state
     entity_id: binary_sensor.homebase_s1_connected
@@ -43,7 +42,6 @@ automation:
       seconds: 60
   actions:
   - action: shell_command.eufy_sync_snapshot_times
-  - action: shell_command.eufy_sync_flc_stale_lights
   mode: single
 - id: 'eufy_snapshot_times_periodic'
   alias: 'Eufy: periodic snapshot time sync'

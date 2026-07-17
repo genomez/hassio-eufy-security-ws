@@ -106,6 +106,10 @@ import {
   WritePayload,
   isT8110DetectionModeEnabled,
 } from "./utils";
+import {
+  isHubAuthoritativeDeviceCloudProperty,
+  isHubAuthoritativeDeviceHttpParam,
+} from "./hubAuthoritative";
 import { DecimalToRGBColor, eslTimestamp, getCurrentTimeInSeconds, isCharging } from "../p2p/utils";
 import { HomeBaseS1VideoMotionEvent } from "../p2p/homebaseS1Grid";
 import {
@@ -175,6 +179,10 @@ export class Device extends TypedEmitter<DeviceEvents> {
     const metadata = this.getPropertiesMetadata(true);
     for (const property of Object.values(metadata)) {
       if (this.rawDevice[property.key] !== undefined && typeof property.key === "string") {
+        // Hub-authoritative live state — cloud device list is often stale after local HA control.
+        if (isHubAuthoritativeDeviceCloudProperty(property.name)) {
+          continue;
+        }
         if (
           property.key === "cover_path" &&
           !this.getPropertyValue(property.name) &&
@@ -197,6 +205,9 @@ export class Device extends TypedEmitter<DeviceEvents> {
     }
     if (this.rawDevice.params) {
       this.rawDevice.params.forEach((param) => {
+        if (isHubAuthoritativeDeviceHttpParam(param.param_type, "http")) {
+          return;
+        }
         this.updateRawProperty(param.param_type, param.param_value, "http");
       });
     }
@@ -304,6 +315,9 @@ export class Device extends TypedEmitter<DeviceEvents> {
   }
 
   public updateRawProperty(type: number, value: string, source: SourceType): boolean {
+    if (isHubAuthoritativeDeviceHttpParam(type, source)) {
+      return false;
+    }
     const parsedValue = ParameterHelper.readValue(this.getStationSerial(), type, value, rootHTTPLogger);
     if (
       parsedValue !== undefined &&

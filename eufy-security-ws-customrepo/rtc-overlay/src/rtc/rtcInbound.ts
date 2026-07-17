@@ -5,6 +5,7 @@ import { CommandResult } from "../p2p/models";
 import { CommandType, ErrorCode } from "../p2p/types";
 import { parsePortalHeader, parsePortalPacket } from "./rtcPacket";
 import { dispatchPortalDatabaseInbound, StationDatabaseInboundSession } from "./stationDatabaseInbound";
+import { RtcInboundDiagEntry } from "./rtcInboundDiagnostics";
 
 /** Minimal session surface for RTC inbound dispatch. */
 export interface RtcInboundSession {
@@ -14,6 +15,24 @@ export interface RtcInboundSession {
   emit(event: "push notification", message: PushMessage): boolean;
   emit(event: "floodlight manual switch", channel: number, enabled: boolean): boolean;
   emit(event: "hub notify update"): boolean;
+  /** Optional hook: hub returned a successful command-channel ack (e.g. CMD_PING). */
+  notifyRtcPollAck?(commandID: number, errCode: number): void;
+  recordRtcInboundDiagnostic?(entry: RtcInboundDiagEntry): void;
+}
+
+function recordDiag(session: RtcInboundSession, entry: RtcInboundDiagEntry): void {
+  session.recordRtcInboundDiagnostic?.(entry);
+}
+
+function isSuccessfulPortalAck(errCode: number | undefined): boolean {
+  return errCode === undefined || errCode === 0;
+}
+
+function notifyRtcPollAck(session: RtcInboundSession, commandID: number, errCode: number | undefined): void {
+  if (!isSuccessfulPortalAck(errCode)) {
+    return;
+  }
+  session.notifyRtcPollAck?.(commandID, errCode ?? 0);
 }
 
 /**
@@ -49,6 +68,12 @@ export function dispatchRtcInbound(session: RtcInboundSession, buf: Buffer, link
       ) {
         return;
       }
+      recordDiag(session, {
+        kind: "raw_json",
+        linkType,
+        commandID: (parsed as { cmd?: number }).cmd,
+        bytes: buf.length,
+      });
       return;
     }
   }
@@ -88,6 +113,13 @@ function dispatchPortalRtcInbound(session: RtcInboundSession, buf: Buffer, linkT
 
   const parsed = parsePortalPacket(buf, linkType) ?? parsePortalPacket(buf, linkType === 1 ? 3 : 1);
   if (!parsed) {
+    recordDiag(session, {
+      kind: "unhandled_portal",
+      linkType,
+      commandID: header.commandID,
+      bytes: buf.length,
+      detail: "parsePortalPacket failed",
+    });
     rootP2PLogger.debug("RtcInbound unhandled portal frame", {
       stationSN: session.getStationSn(),
       linkType,
@@ -114,6 +146,43 @@ function dispatchPortalRtcInbound(session: RtcInboundSession, buf: Buffer, linkT
     ) {
       return;
     }
+    if (isSuccessfulPortalAck(parsed.errCode)) {
+      notifyRtcPollAck(session, parsed.commandID, parsed.errCode);
+      const kind = parsed.commandID === CommandType.CMD_PING ? "ping_ack" : "cmd_ack";
+      recordDiag(session, {
+        kind,
+        linkType,
+        commandID: parsed.commandID,
+        errCode: parsed.errCode,
+      });
+      if (parsed.commandID === CommandType.CMD_PING) {
+        rootP2PLogger.debug("RtcInbound ping ack", {
+          stationSN: session.getStationSn(),
+          channel: header.channelID,
+          segmen: parsed.segmen,
+        });
+      } else if (parsed.commandID === CommandType.CMD_CAMERA_INFO) {
+        rootP2PLogger.debug("RtcInbound camera info ack", {
+          stationSN: session.getStationSn(),
+          channel: header.channelID,
+          segmen: parsed.segmen,
+        });
+      } else {
+        rootP2PLogger.debug("RtcInbound command ack", {
+          stationSN: session.getStationSn(),
+          commandID: parsed.commandID,
+          channel: header.channelID,
+          segmen: parsed.segmen,
+        });
+      }
+      return;
+    }
+    recordDiag(session, {
+      kind: "unmatched",
+      linkType,
+      commandID: parsed.commandID,
+      errCode: parsed.errCode,
+    });
     rootP2PLogger.info("RtcInbound unmatched command response", {
       stationSN: session.getStationSn(),
       commandID: parsed.commandID,
