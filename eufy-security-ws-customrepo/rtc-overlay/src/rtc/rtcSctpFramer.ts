@@ -135,7 +135,12 @@ export class RtcSctpFramer {
 
     const recvFrameMaxDelayMs = 15000;
     const maxPacketCount = 5000;
-    const maxPacketBytes = 1000;
+    // Hub soft-TTL ~360s: PTCS padded to maxPacketBytes. 1000 → ~1085B UDP cliffs harder;
+    // 800 → ~885B (run.sh default). Bare sometimes soft-recovers; HA often does not — pair with
+    // RTC_PROACTIVE_RECONNECT_MS + RTC_HANDOFF rather than relying on same-session hold.
+    const maxPacketBytesEnv = Number(process.env.RTC_SCTP_MAX_PACKET_BYTES ?? 800);
+    const maxPacketBytes =
+      Number.isFinite(maxPacketBytesEnv) && maxPacketBytesEnv > 0 ? Math.floor(maxPacketBytesEnv) : 800;
     const maxFecGroupCount = 10;
 
     this.sendManager = this.mod._sctp_frame_manager_create(
@@ -166,7 +171,7 @@ export class RtcSctpFramer {
     }, 100);
 
     this.ready = true;
-    rootHTTPLogger.info("RtcSctpFramer initialized");
+    rootHTTPLogger.info("RtcSctpFramer initialized", { maxPacketBytes, maxFecGroupCount });
   }
 
   public isReady(): boolean {

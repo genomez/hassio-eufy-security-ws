@@ -105,6 +105,8 @@ fi
 # RTC_HANDSHAKE_PACE_MS now reproduces that pacing deterministically (see rtcPeer.ts), so the
 # handshake is reliable with verbose OFF.
 export RTC_VERBOSE="${RTC_VERBOSE:-0}"
+# Probe: hub SDP fingerprint is sha-256 but libdatachannel remoteFingerprint() often returns empty sha-1.
+export RTC_SKIP_FP_VERIFY="${RTC_SKIP_FP_VERIFY:-1}"
 # Per-message block (ms) applied inside the libdatachannel Debug log callback, but ONLY while a
 # peer is mid-handshake (never during steady-state streaming). This paces the native ICE/DTLS
 # threads just enough for the T9000 DTLS handshake to complete. Set to 0 to disable pacing.
@@ -113,7 +115,12 @@ export RTC_HANDSHAKE_PACE_MS="${RTC_HANDSHAKE_PACE_MS:-0.6}"
 # load) should retry quickly instead of blocking for the old 3-minute default.
 export RTC_CONNECT_TIMEOUT_MS="${RTC_CONNECT_TIMEOUT_MS:-45000}"
 # T9000 firmware (2026-07) expects the CLIENT to send the SDP offer after scall 100+TURN.
-export RTC_CLIENT_OFFER="${RTC_CLIENT_OFFER:-1}"
+# Hub-as-offerer (0) is currently required: client-offer mode reaches ICE but hub never
+# answers DTLS (ClientHello blackholed). Answerer mode completes WebrtcDataChannel ~300ms.
+export RTC_CLIENT_OFFER="${RTC_CLIENT_OFFER:-0}"
+# If >0 and CLIENT_OFFER=0: send our SDP offer after this many ms waiting for hub offer.
+# Keep 0 for now — client-offer DTLS is unreliable on current T9000 firmware.
+export RTC_HUB_OFFER_WAIT_MS="${RTC_HUB_OFFER_WAIT_MS:-0}"
 # Send an explicit DTLS role in our offer (the hub can't negotiate from "actpass"): we are
 # active (DTLS client), so the hub must be passive (server). Answer role is coerced to match.
 export RTC_SIGNAL_SETUP="${RTC_SIGNAL_SETUP:-active}"
@@ -129,7 +136,40 @@ export RTC_DELAY_SDP_UNTIL_GATHERING="${RTC_DELAY_SDP_UNTIL_GATHERING:-0}"
 export RTC_POLL_MAX_MISSES="${RTC_POLL_MAX_MISSES:-3}"
 export RTC_POLL_WATCHDOG_MS="${RTC_POLL_WATCHDOG_MS:-35000}"
 export RTC_PROPERTY_REFRESH_MS="${RTC_PROPERTY_REFRESH_MS:-300000}"
-bashio::log.info "RTC_ICE_POLICY=${RTC_ICE_POLICY} RTC_DELAY_SDP_UNTIL_GATHERING=${RTC_DELAY_SDP_UNTIL_GATHERING} RTC_POLL_MAX_MISSES=${RTC_POLL_MAX_MISSES} RTC_POLL_WATCHDOG_MS=${RTC_POLL_WATCHDOG_MS} RTC_PROPERTY_REFRESH_MS=${RTC_PROPERTY_REFRESH_MS}"
+# Hub soft-TTL ~360s: SCTP/command app-data stops (ICE may live). Bare sometimes soft-recovers
+# after ~15s; HA / some bare rides hard-cliff. Do not rely on same-session hold — refresh early.
+# With RTC_HANDOFF=1 (default) open a second session before closing the first (~25s gap avoided).
+# 0 = disabled.
+export RTC_PROACTIVE_RECONNECT_MS="${RTC_PROACTIVE_RECONNECT_MS:-270000}"
+# Make-before-break WebRTC refresh. 0 = old hard-close proactive reconnect.
+export RTC_HANDOFF="${RTC_HANDOFF:-1}"
+# libsctp PTCS padding: 1000 → ~1085B UDP (worse cliff behavior); 800 → ~885B (production default).
+# Still pair with proactive+handoff — SCTP800 alone does not guarantee HA hold past ~360s.
+export RTC_SCTP_MAX_PACKET_BYTES="${RTC_SCTP_MAX_PACKET_BYTES:-800}"
+# After inventory cloud-wake: swipe-refresh wake (hub scall + TURN Allocate). Capture showed
+# phone pull-to-refresh hits Coturn :3478 without opening a camera.
+export RTC_SWIPE_WAKE="${RTC_SWIPE_WAKE:-1}"
+export RTC_SWIPE_WAKE_AFTER_FAILURES="${RTC_SWIPE_WAKE_AFTER_FAILURES:-3}"
+export RTC_SWIPE_WAKE_MIN_INTERVAL_MS="${RTC_SWIPE_WAKE_MIN_INTERVAL_MS:-90000}"
+export RTC_SWIPE_WAKE_TIMEOUT_MS="${RTC_SWIPE_WAKE_TIMEOUT_MS:-20000}"
+export RTC_SWIPE_WAKE_CAMERA_TIMEOUT_MS="${RTC_SWIPE_WAKE_CAMERA_TIMEOUT_MS:-20000}"
+# Rich TURN wake: harvest creds via scall (no peer) then Allocate/permission/burst.
+export RTC_TURN_HARVEST_TIMEOUT_MS="${RTC_TURN_HARVEST_TIMEOUT_MS:-8000}"
+export RTC_TURN_ALLOCATE_TIMEOUT_MS="${RTC_TURN_ALLOCATE_TIMEOUT_MS:-8000}"
+export RTC_TURN_BURST_MS="${RTC_TURN_BURST_MS:-2500}"
+# After TURN harvest: garage camera live-view with production ICE (default on).
+export RTC_SWIPE_WAKE_CAMERA_FALLBACK="${RTC_SWIPE_WAKE_CAMERA_FALLBACK:-1}"
+# Legacy aliases (RTC_LIVE_WAKE_* still honored as fallbacks in code).
+export RTC_LIVE_WAKE="${RTC_LIVE_WAKE:-1}"
+export RTC_LIVE_WAKE_AFTER_FAILURES="${RTC_LIVE_WAKE_AFTER_FAILURES:-3}"
+export RTC_LIVE_WAKE_MIN_INTERVAL_MS="${RTC_LIVE_WAKE_MIN_INTERVAL_MS:-90000}"
+export RTC_LIVE_WAKE_TIMEOUT_MS="${RTC_LIVE_WAKE_TIMEOUT_MS:-20000}"
+# Garage FLC channel for camera live-view fallback.
+export RTC_LIVE_WAKE_DEVICE_SN="${RTC_LIVE_WAKE_DEVICE_SN:-T8425T2123391972}"
+# Floodlight HA sync: trust notify ON after reconnect grace; poll param 1400 more often / on motion.
+export RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS="${RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS:-45000}"
+export RTC_FLOODLIGHT_POLL_INTERVAL_MIN="${RTC_FLOODLIGHT_POLL_INTERVAL_MIN:-2}"
+bashio::log.info "RTC_ICE_POLICY=${RTC_ICE_POLICY} RTC_DELAY_SDP_UNTIL_GATHERING=${RTC_DELAY_SDP_UNTIL_GATHERING} RTC_POLL_MAX_MISSES=${RTC_POLL_MAX_MISSES} RTC_POLL_WATCHDOG_MS=${RTC_POLL_WATCHDOG_MS} RTC_PROPERTY_REFRESH_MS=${RTC_PROPERTY_REFRESH_MS} RTC_PROACTIVE_RECONNECT_MS=${RTC_PROACTIVE_RECONNECT_MS} RTC_HANDOFF=${RTC_HANDOFF} RTC_SCTP_MAX_PACKET_BYTES=${RTC_SCTP_MAX_PACKET_BYTES} RTC_SWIPE_WAKE=${RTC_SWIPE_WAKE} RTC_SWIPE_WAKE_AFTER_FAILURES=${RTC_SWIPE_WAKE_AFTER_FAILURES} RTC_SWIPE_WAKE_CAMERA_FALLBACK=${RTC_SWIPE_WAKE_CAMERA_FALLBACK} RTC_TURN_BURST_MS=${RTC_TURN_BURST_MS} RTC_FLOODLIGHT_POLL_INTERVAL_MIN=${RTC_FLOODLIGHT_POLL_INTERVAL_MIN}"
 
 JSON_STRING="$( jq -n \
   --arg username "$USERNAME" \
