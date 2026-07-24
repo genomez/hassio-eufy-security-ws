@@ -135,7 +135,8 @@ export RTC_NO_TURN="${RTC_NO_TURN:-1}"
 export RTC_DELAY_SDP_UNTIL_GATHERING="${RTC_DELAY_SDP_UNTIL_GATHERING:-0}"
 export RTC_POLL_MAX_MISSES="${RTC_POLL_MAX_MISSES:-3}"
 export RTC_POLL_WATCHDOG_MS="${RTC_POLL_WATCHDOG_MS:-35000}"
-export RTC_PROPERTY_REFRESH_MS="${RTC_PROPERTY_REFRESH_MS:-300000}"
+# Periodic hub-first property sync. With proactive handoff ~270s, 5m was redundant; 15m is enough.
+export RTC_PROPERTY_REFRESH_MS="${RTC_PROPERTY_REFRESH_MS:-900000}"
 # Hub soft-TTL ~360s: SCTP/command app-data stops (ICE may live). Bare sometimes soft-recovers
 # after ~15s; HA / some bare rides hard-cliff. Do not rely on same-session hold — refresh early.
 # With RTC_HANDOFF=1 (default) open a second session before closing the first (~25s gap avoided).

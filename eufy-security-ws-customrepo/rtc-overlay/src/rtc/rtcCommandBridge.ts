@@ -39,6 +39,8 @@ export function portalPacketFromP2PMessage(
         payload: {
           account_id: json.account_id ?? adminUserId,
           cmd: nestedCmd,
+          // Preserve mChannel from P2P JSON (HB3/T9000 storage info sends mChannel: 0).
+          ...(json.mChannel !== undefined ? { mChannel: json.mChannel } : {}),
           mValue3: json.mValue3 ?? 0,
           payload: json.payload ?? {},
         },

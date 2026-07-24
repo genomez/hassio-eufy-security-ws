@@ -1,7 +1,7 @@
 import { rootHTTPLogger, rootP2PLogger } from "../logging";
 import { parseJSON } from "../utils";
 import { PushMessage } from "../push/models";
-import { CommandResult } from "../p2p/models";
+import { CommandResult, StorageInfoBodyHB3, StorageInfoHB3 } from "../p2p/models";
 import { CommandType, ErrorCode } from "../p2p/types";
 import { parsePortalHeader, parsePortalPacket } from "./rtcPacket";
 import { dispatchPortalDatabaseInbound, StationDatabaseInboundSession } from "./stationDatabaseInbound";
@@ -15,6 +15,7 @@ export interface RtcInboundSession {
   emit(event: "push notification", message: PushMessage): boolean;
   emit(event: "floodlight manual switch", channel: number, enabled: boolean): boolean;
   emit(event: "hub notify update"): boolean;
+  emit(event: "storage info hb3", channel: number, storageInfo: StorageInfoBodyHB3): boolean;
   /** Optional hook: hub returned a successful command-channel ack (e.g. CMD_PING). */
   notifyRtcPollAck?(commandID: number, errCode: number): void;
   recordRtcInboundDiagnostic?(entry: RtcInboundDiagEntry): void;
@@ -367,6 +368,35 @@ function handleNotifyJson(session: RtcInboundSession, channel: number, data: unk
         enabled,
       });
       session.emit("floodlight manual switch", channel, enabled);
+    }
+    return;
+  }
+
+  // HB3 / T9000 storage info — arrives as CMD_NOTIFY_PAYLOAD (1351) on notify SCTP
+  // after an empty CMD_SET_PAYLOAD ack for nested 1307 (same shape as classic P2P).
+  if (cmd === CommandType.CMD_STORAGE_INFO_HB3) {
+    const payload = json.payload as StorageInfoHB3 | StorageInfoBodyHB3 | undefined;
+    const body =
+      payload && typeof payload === "object" && "emmc_info" in payload
+        ? (payload as StorageInfoBodyHB3)
+        : (payload as StorageInfoHB3 | undefined)?.body;
+    if (body && (body.emmc_info !== undefined || body.hdd_info !== undefined)) {
+      rootP2PLogger.info("RtcInbound storage info HB3", {
+        stationSN: session.getStationSn(),
+        channel,
+        hasEmmc: body.emmc_info !== undefined,
+        hasHdd: body.hdd_info !== undefined,
+        emmcUsedPercent: body.emmc_info?.data_used_percent,
+        hddUsedPercent: (body.hdd_info as { data_used_percent?: number } | undefined)?.data_used_percent,
+      });
+      session.emit("storage info hb3", channel, body);
+    } else {
+      rootP2PLogger.warn("RtcInbound storage info HB3 missing body", {
+        stationSN: session.getStationSn(),
+        channel,
+        payloadKeys:
+          payload && typeof payload === "object" ? Object.keys(payload as object).slice(0, 20) : typeof payload,
+      });
     }
     return;
   }
