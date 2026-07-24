@@ -1028,6 +1028,28 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
       this.sendQueue.unshift(message);
       return;
     }
+    // TTL isolation: drop non-ping RTC commands unless /tmp/rtc_allow_cmds exists (probe window).
+    if (process.env.RTC_PING_ONLY === "1" || process.env.RTC_PING_ONLY === "true") {
+      const commandType = message.p2pCommand.commandType;
+      const isKeepalive =
+        commandType === CommandType.CMD_PING || commandType === CommandType.CMD_GET_DEVICE_PING;
+      let probeAllow = false;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        probeAllow = require("fs").existsSync("/tmp/rtc_allow_cmds");
+      } catch {
+        probeAllow = false;
+      }
+      if (!isKeepalive && !probeAllow) {
+        rootP2PLogger.info("RTC_PING_ONLY dropped non-ping command", {
+          stationSN: this.rawStation.station_sn,
+          commandType,
+          nestedCommandType: message.nestedCommandType,
+        });
+        this.sendQueuedMessage();
+        return;
+      }
+    }
     const packet = portalPacketFromP2PMessage(message, transport.adminUserId);
     if (!packet) {
       rootP2PLogger.warn("RtcCommandBridge could not encode command", {
@@ -4622,7 +4644,9 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
       this._clearRtcKeepaliveTimeout();
       return;
     }
-    this.sendCommandPing(Station.CHANNEL);
+    const pingChannelEnv = Number(process.env.RTC_PING_CHANNEL ?? Station.CHANNEL);
+    const pingChannel = Number.isFinite(pingChannelEnv) ? pingChannelEnv : Station.CHANNEL;
+    this.sendCommandPing(pingChannel);
     this.rtcKeepaliveTimeout = setTimeout(() => {
       this.scheduleRtcKeepalive();
     }, this.getHeartbeatInterval());

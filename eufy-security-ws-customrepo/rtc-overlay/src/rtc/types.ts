@@ -39,6 +39,10 @@ export interface RtcSignalingOptions {
   iceTransportPolicy?: RTCIceTransportPolicy;
   /** DTLS setup in SDP answer — default passive. */
   dtlsSetup?: "active" | "passive";
+  /** Override RTC_NO_TURN for this session (camera-channel live wake). */
+  allowTurn?: boolean;
+  /** NVR/camera channel for scall (0 = hub-level). */
+  channelId?: number;
 }
 
 export const DEFAULT_RTC_WS_PATH = "/v1/rtc/ws/join?reqtype=nvr";

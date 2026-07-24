@@ -12,6 +12,11 @@ export interface RtcSessionOptions extends RtcSignalingOptions {
   /** admin_user_id for WS account field. */
   adminUserId?: string;
   connectTimeoutMs?: number;
+  /**
+   * Harvest TURN creds from scall 100 then hangup without creating a PeerConnection.
+   * Used for Coturn UDP wake so we don't hold a failed relay-only session on the hub.
+   */
+  turnHarvestOnly?: boolean;
 }
 
 export interface RtcSessionEvents {
@@ -49,9 +54,14 @@ export class RtcSession extends EventEmitter {
   private sdpHandled = false;
   // T9000 2026-07 firmware: the hub grants TURN (scall 100) then waits for the CLIENT
   // to send the SDP offer. When enabled we offer first and treat the hub reply as an answer.
+  // Default is answerer (hub offers). Client-offer mode can ICE-connect then stall
+  // with hub ignoring DTLS ClientHello on current T9000 firmware — see RTC_CLIENT_OFFER.
   private readonly isOfferer =
     process.env.RTC_CLIENT_OFFER === "1" || process.env.RTC_CLIENT_OFFER === "true";
+  /** True once we have sent (or are sending) a client offer — hub SDP is then treated as answer. */
+  private actingAsOfferer = false;
   private clientOfferSent = false;
+  private hubOfferFallbackTimer?: NodeJS.Timeout;
   private messageChain: Promise<void> = Promise.resolve();
   private signalingKeepaliveTimer?: NodeJS.Timeout;
   private readonly signalingKeepaliveMs = 25_000;
@@ -135,6 +145,7 @@ export class RtcSession extends EventEmitter {
   public close(): void {
     this.closed = true;
     this.connected = false;
+    this.clearHubOfferFallback();
     this.stopSignalingKeepalive();
     try {
       this.signaling.sendHangup(this.channelId);
@@ -228,20 +239,25 @@ export class RtcSession extends EventEmitter {
       this.rtc408Retries = 0;
       this.turn = payload.turn;
       this.emit("turn", payload.turn);
+      if (this.opts.turnHarvestOnly) {
+        rootHTTPLogger.info("RtcSession turn harvest — hangup without peer init", {
+          channelId: this.channelId,
+        });
+        // Release the hub slot immediately; caller runs Coturn UDP burst separately.
+        setImmediate(() => {
+          if (!this.closed) {
+            this.close();
+          }
+        });
+        return;
+      }
       await this.peer.initWithTurn(payload.turn, this.resolvePeerOptions());
       if (this.isOfferer && !this.clientOfferSent) {
-        this.clientOfferSent = true;
-        try {
-          const offerSdp = await this.peer.createOffer();
-          const scallJson = this.peer.getCommandChannelScallJson(offerSdp);
-          this.signaling.sendInfoSdp(scallJson, this.channelId);
-          rootHTTPLogger.info("RtcSession sent client SDP offer", { len: offerSdp.length });
-        } catch (err) {
-          this.clientOfferSent = false;
-          rootHTTPLogger.warn("RtcSession client offer failed", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        await this.sendClientOffer("initial");
+      } else if (!this.isOfferer) {
+        // Hub often waits ~20–25s on TURN before offering when TURN is unreachable.
+        // If it hasn't offered yet, send our own offer so negotiation can proceed.
+        this.scheduleHubOfferFallback();
       }
     } else if (status === 200) {
       this.signaling.sendAck(this.channelId);
@@ -259,6 +275,8 @@ export class RtcSession extends EventEmitter {
       this.peer.close();
       this.sdpHandled = false;
       this.clientOfferSent = false;
+      this.actingAsOfferer = false;
+      this.clearHubOfferFallback();
       this.turn = undefined;
       this.connected = false;
       const waitMs = Math.min(5000 + this.rtc408Retries * 5000, 30000);
@@ -283,7 +301,59 @@ export class RtcSession extends EventEmitter {
     const dtlsSetup =
       this.opts.dtlsSetup ??
       (envSetup === "active" ? "active" : envSetup === "passive" ? "passive" : "passive");
-    return { iceTransportPolicy, dtlsSetup };
+    return {
+      iceTransportPolicy,
+      dtlsSetup,
+      allowTurn: this.opts.allowTurn,
+    };
+  }
+
+  private clearHubOfferFallback(): void {
+    if (this.hubOfferFallbackTimer) {
+      clearTimeout(this.hubOfferFallbackTimer);
+      this.hubOfferFallbackTimer = undefined;
+    }
+  }
+
+  /**
+   * When waiting for the hub to offer, optionally send our own offer after a timeout.
+   * Disabled by default (RTC_HUB_OFFER_WAIT_MS=0): client-offer DTLS is currently unreliable
+   * on this firmware; enable only when probing a faster reconnect path.
+   */
+  private scheduleHubOfferFallback(): void {
+    this.clearHubOfferFallback();
+    const waitMs = Number(process.env.RTC_HUB_OFFER_WAIT_MS ?? 0);
+    if (!Number.isFinite(waitMs) || waitMs <= 0) {
+      return;
+    }
+    this.hubOfferFallbackTimer = setTimeout(() => {
+      this.hubOfferFallbackTimer = undefined;
+      void this.sendClientOffer("hub_offer_timeout");
+    }, waitMs);
+  }
+
+  private async sendClientOffer(reason: "initial" | "hub_offer_timeout"): Promise<void> {
+    if (this.closed || this.sdpHandled || this.clientOfferSent) {
+      return;
+    }
+    this.clientOfferSent = true;
+    this.actingAsOfferer = true;
+    try {
+      const offerSdp = await this.peer.createOffer();
+      if (this.closed || this.sdpHandled) {
+        return;
+      }
+      const scallJson = this.peer.getCommandChannelScallJson(offerSdp);
+      this.signaling.sendInfoSdp(scallJson, this.channelId);
+      rootHTTPLogger.info("RtcSession sent client SDP offer", { len: offerSdp.length, reason });
+    } catch (err) {
+      this.clientOfferSent = false;
+      this.actingAsOfferer = false;
+      rootHTTPLogger.warn("RtcSession client offer failed", {
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private async handleInfoResponse(payload: InfoPayload): Promise<void> {
@@ -315,6 +385,7 @@ export class RtcSession extends EventEmitter {
         return;
       }
       this.sdpHandled = true;
+      this.clearHubOfferFallback();
       let sdpOffer: string;
       try {
         const json = JSON.parse(sdpPayload);
@@ -327,8 +398,8 @@ export class RtcSession extends EventEmitter {
         rootHTTPLogger.warn("RtcSession SDP before TURN — waiting");
       }
 
-      if (this.isOfferer) {
-        // We offered; this remote SDP is the hub's answer.
+      if (this.actingAsOfferer || this.isOfferer) {
+        // We offered (or fallback-offered); this remote SDP is the hub's answer.
         rootHTTPLogger.info("RtcSession received SDP answer", { len: sdpOffer.length });
         await this.peer.handleRemoteAnswer(sdpOffer);
         return;

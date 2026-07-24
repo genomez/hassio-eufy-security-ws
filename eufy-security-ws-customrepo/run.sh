@@ -164,8 +164,8 @@ export RTC_LIVE_WAKE="${RTC_LIVE_WAKE:-1}"
 export RTC_LIVE_WAKE_AFTER_FAILURES="${RTC_LIVE_WAKE_AFTER_FAILURES:-3}"
 export RTC_LIVE_WAKE_MIN_INTERVAL_MS="${RTC_LIVE_WAKE_MIN_INTERVAL_MS:-90000}"
 export RTC_LIVE_WAKE_TIMEOUT_MS="${RTC_LIVE_WAKE_TIMEOUT_MS:-20000}"
-# Garage FLC channel for camera live-view fallback.
-export RTC_LIVE_WAKE_DEVICE_SN="${RTC_LIVE_WAKE_DEVICE_SN:-T8425T2123391972}"
+# Optional camera SN for live-view wake fallback (empty = skip camera path unless set).
+export RTC_LIVE_WAKE_DEVICE_SN="${RTC_LIVE_WAKE_DEVICE_SN:-}"
 # Floodlight HA sync: trust notify ON after reconnect grace; poll param 1400 more often / on motion.
 export RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS="${RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS:-45000}"
 export RTC_FLOODLIGHT_POLL_INTERVAL_MIN="${RTC_FLOODLIGHT_POLL_INTERVAL_MIN:-2}"

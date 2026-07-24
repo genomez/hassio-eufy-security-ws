@@ -245,21 +245,14 @@ function handleLateCommandResponse(
       const value = nested?.data?.value;
       if (value !== undefined) {
         const enabled = value === 1;
-        if (!enabled) {
-          rootP2PLogger.info("RtcInbound late floodlight ack (1700)", {
-            stationSN: session.getStationSn(),
-            channel,
-            enabled,
-            segmen: parsed.segmen,
-          });
-          session.emit("floodlight manual switch", channel, enabled);
-        } else {
-          rootP2PLogger.debug("RtcInbound late floodlight ack ON ignored (1700)", {
-            stationSN: session.getStationSn(),
-            channel,
-            segmen: parsed.segmen,
-          });
-        }
+        rootP2PLogger.info("RtcInbound late floodlight ack (1700)", {
+          stationSN: session.getStationSn(),
+          channel,
+          enabled,
+          segmen: parsed.segmen,
+        });
+        // Reconnect-stale ON filtering is applied in EufySecurity.onFloodlightManualSwitch.
+        session.emit("floodlight manual switch", channel, enabled);
         return true;
       }
     }
@@ -269,21 +262,13 @@ function handleLateCommandResponse(
     const body = parsed.data as { value?: number } | undefined;
     if (body?.value !== undefined) {
       const enabled = body.value === 1;
-      if (!enabled) {
-        rootP2PLogger.info("RtcInbound late floodlight ack (1400)", {
-          stationSN: session.getStationSn(),
-          channel,
-          enabled,
-          segmen: parsed.segmen,
-        });
-        session.emit("floodlight manual switch", channel, enabled);
-      } else {
-        rootP2PLogger.debug("RtcInbound late floodlight ack ON ignored (1400)", {
-          stationSN: session.getStationSn(),
-          channel,
-          segmen: parsed.segmen,
-        });
-      }
+      rootP2PLogger.info("RtcInbound late floodlight ack (1400)", {
+        stationSN: session.getStationSn(),
+        channel,
+        enabled,
+        segmen: parsed.segmen,
+      });
+      session.emit("floodlight manual switch", channel, enabled);
       return true;
     }
   }
@@ -369,19 +354,13 @@ function handleNotifyJson(session: RtcInboundSession, channel: number, data: unk
   }
 
   // Nested command notify with return code (e.g. 1700/1400 floodlight result).
-  // Notify-channel ON is often stale after reconnect; trust OFF and command responses.
+  // Emit ON and OFF; EufySecurity applies a short post-reconnect grace so stale ON
+  // bursts after RTC connect do not flip HA until hub truth can be polled.
   if (cmd === CommandType.CMD_SET_FLOODLIGHT_MANUAL_SWITCH) {
     const payload = json.payload as { data?: { value?: number } } | undefined;
     const value = payload?.data?.value;
     if (value !== undefined) {
       const enabled = value === 1;
-      if (enabled) {
-        rootP2PLogger.debug("RtcInbound floodlight notify ON ignored", {
-          stationSN: session.getStationSn(),
-          channel,
-        });
-        return;
-      }
       rootP2PLogger.info("RtcInbound floodlight notify payload", {
         stationSN: session.getStationSn(),
         channel,

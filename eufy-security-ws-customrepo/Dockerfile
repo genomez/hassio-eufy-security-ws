@@ -5,7 +5,7 @@ FROM ghcr.io/home-assistant/amd64-base:3.23
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
 ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#T9000-testing
 # Bump when EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG EUFY_CLIENT_BUILD_ID=hubfirst2b-20260715w
+ARG EUFY_CLIENT_BUILD_ID=wake-v3-20260722a
 
 COPY rtc-overlay /tmp/rtc-overlay
 

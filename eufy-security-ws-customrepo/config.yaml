@@ -1,6 +1,6 @@
 name: eufy-security-ws-customrepo
 description: Eufy Security ws with editable build.yaml (custom client git + auto loginMega for eufy_mega push)
-version: 3.0.9-hubfirst-w
+version: 3.0.18-wake-v3
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

@@ -141,8 +141,14 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
   private devices: Devices = {};
 
   private readonly P2P_REFRESH_INTERVAL_MIN = 720;
-  /** Poll hub param 1400 (floodlight) via CMD_CAMERA_INFO — RTC push is unreliable on T9000. */
-  private readonly FLOODLIGHT_POLL_INTERVAL_MIN = 5;
+  /**
+   * Poll hub param 1400 (floodlight) via CMD_CAMERA_INFO.
+   * Override with RTC_FLOODLIGHT_POLL_INTERVAL_MIN (minutes). Default 2.
+   */
+  private readonly FLOODLIGHT_POLL_INTERVAL_MIN = Math.max(
+    1,
+    Number(process.env.RTC_FLOODLIGHT_POLL_INTERVAL_MIN ?? 2)
+  );
 
   private cameraMaxLivestreamSeconds = 30;
   private cameraStationLivestreamTimeout: Map<string, NodeJS.Timeout> = new Map<string, NodeJS.Timeout>();
@@ -195,6 +201,10 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     [stationSN: string]: NodeJS.Timeout;
   } = {};
   private floodlightPollInitialTimeouts: Map<string, NodeJS.Timeout[]> = new Map();
+  /** Station RTC connect time — used to ignore stale floodlight notify ON after reconnect. */
+  private stationRtcConnectedAt = new Map<string, number>();
+  /** Debounced camera-info polls triggered by motion / deferred notify ON. */
+  private floodlightPollDebounce = new Map<string, NodeJS.Timeout>();
   private deviceSnoozeTimeout: {
     [dataType: string]: NodeJS.Timeout;
   } = {};
@@ -413,6 +423,53 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     this.api.setSerialNumber(this.persistentData.serial_number);
 
     this.syncMegaRtcCredentialsToApi();
+    this.api.setMegaCloudWakeHandler(async () => {
+      try {
+        const mega = await this.getMegaApi();
+        if (!mega.hasValidSession()) {
+          rootMainLogger.debug("v6 cloud wake: no valid mega session, skipping");
+          return;
+        }
+        // App swipe-refresh hits house + devicerelation + things + devicemanage
+        // (Firewalla capture). Mega WAF ~3s/request — sequential via rate limiter.
+        const steps: Array<[string, () => Promise<unknown>]> = [
+          ["get_devs_list", () => mega.getDevsListDecrypted()],
+          [
+            "get_device_relation",
+            () =>
+              mega.callDecrypted("devicerelation", "/app/devicerelation/get_device_list", {
+                attribute: 3,
+              }),
+          ],
+          ["get_things_list", () => mega.getThingsListDecrypted()],
+          [
+            "get_user_mqtt_info",
+            async () => {
+              const info = await mega.getUserMqttInfo();
+              rootMainLogger.info("v6 cloud wake: mqtt endpoint", {
+                endpoint: info?.endpoint_addr,
+                thingName: info?.thing_name,
+              });
+              return info;
+            },
+          ],
+        ];
+        for (const [name, fn] of steps) {
+          try {
+            await fn();
+            rootMainLogger.info(`v6 cloud wake: ${name} ok`);
+          } catch (err) {
+            rootMainLogger.warn(`v6 cloud wake: ${name} failed`, {
+              error: getError(ensureError(err)),
+            });
+          }
+        }
+      } catch (err) {
+        rootMainLogger.warn("v6 cloud wake failed", {
+          error: getError(ensureError(err)),
+        });
+      }
+    });
 
     this.pushService = await PushNotificationService.initialize();
     this.pushService.on("connect", async (token: string) => {
@@ -999,6 +1056,7 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
   }
 
   private onStationConnect(station: Station): void {
+    this.stationRtcConnectedAt.set(station.getSerial(), Date.now());
     this.emit("station connect", station);
     this.refreshP2PData(station);
     void this.getDevicesFromStation(station.getSerial())
@@ -1049,6 +1107,38 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     }
     rootMainLogger.debug("Polling floodlight states via camera info", { stationSN: station.getSerial() });
     station.getCameraInfo();
+  }
+
+  /** Debounced floodlight poll — used after motion and when notify ON arrives during reconnect grace. */
+  private requestFloodlightPoll(station: Station, reason: string, delayMs = 1500): void {
+    const stationSN = station.getSerial();
+    const existing = this.floodlightPollDebounce.get(stationSN);
+    if (existing !== undefined) {
+      clearTimeout(existing);
+    }
+    this.floodlightPollDebounce.set(
+      stationSN,
+      setTimeout(() => {
+        this.floodlightPollDebounce.delete(stationSN);
+        if (!station.isConnected()) {
+          return;
+        }
+        rootMainLogger.info("Floodlight poll requested", { stationSN, reason });
+        this.pollFloodlightStates(station);
+      }, delayMs)
+    );
+  }
+
+  private isFloodlightNotifyOnInGrace(stationSN: string): boolean {
+    const graceMs = Number(process.env.RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS ?? 45_000);
+    if (graceMs <= 0) {
+      return false;
+    }
+    const connectedAt = this.stationRtcConnectedAt.get(stationSN);
+    if (connectedAt === undefined) {
+      return false;
+    }
+    return Date.now() - connectedAt < graceMs;
   }
 
   private scheduleFloodlightPoll(station: Station): void {
@@ -1232,6 +1322,10 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
             curVideoState,
             previousVideoState,
           });
+          // Motion often turns FLC lamps on without a trusted HA state update — poll param 1400.
+          if (Device.isFloodLight(device.getDeviceType())) {
+            this.requestFloodlightPoll(station, `motion_start:${deviceSn}`);
+          }
         } else {
           rootMainLogger.debug("HomeBase S1 grid video state motion", {
             stationSN: station.getSerial(),
@@ -1266,6 +1360,12 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
 
   private onStationClose(station: Station): void {
     this.emit("station close", station);
+    this.stationRtcConnectedAt.delete(station.getSerial());
+    const debounce = this.floodlightPollDebounce.get(station.getSerial());
+    if (debounce !== undefined) {
+      clearTimeout(debounce);
+      this.floodlightPollDebounce.delete(station.getSerial());
+    }
     this.clearFloodlightPoll(station.getSerial());
     for (const device_sn of this.cameraStationLivestreamTimeout.keys()) {
       this.getDevice(device_sn)
@@ -3554,6 +3654,15 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
   }
 
   private onFloodlightManualSwitch(station: Station, channel: number, enabled: boolean): void {
+    // After RTC reconnect the hub can burst stale notify ON; ignore those briefly and poll instead.
+    if (enabled && this.isFloodlightNotifyOnInGrace(station.getSerial())) {
+      rootMainLogger.info("Floodlight notify ON deferred during reconnect grace — polling hub", {
+        stationSN: station.getSerial(),
+        channel,
+      });
+      this.requestFloodlightPoll(station, "notify_on_grace", 500);
+      return;
+    }
     this.getStationDevice(station.getSerial(), channel)
       .then((device: Device) => {
         if (device.hasProperty(PropertyName.DeviceLight)) {
@@ -3562,6 +3671,12 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
           // Hub manual-switch events are authoritative; drop any pending HA command and persist.
           this.pendingDeviceLightBySerial.delete(device.getSerial());
           this.saveDeviceLightState(device.getSerial(), enabled);
+          rootMainLogger.info("Floodlight manual switch applied", {
+            stationSN: station.getSerial(),
+            deviceSN: device.getSerial(),
+            channel,
+            enabled,
+          });
         }
       })
       .catch((err) => {

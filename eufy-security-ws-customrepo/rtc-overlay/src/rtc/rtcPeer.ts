@@ -24,6 +24,11 @@ export interface RtcTurnConfig {
 export interface RtcPeerOptions {
   iceTransportPolicy?: RTCIceTransportPolicy;
   dtlsSetup?: "active" | "passive";
+  /**
+   * When true, allow TURN even if RTC_NO_TURN=1.
+   * Used for short-lived camera-channel "live wake" sessions that mimic the phone app.
+   */
+  allowTurn?: boolean;
 }
 
 export interface RtcPeerEvents {
@@ -103,6 +108,26 @@ const HUB_SDP_MID = "2";
 
 function patchAnswerSdp(sdp: string): string {
   return sdp.replace(/a=max-message-size:\d+/g, `a=max-message-size:${ANKER_MAX_MESSAGE_SIZE}`);
+}
+
+/** Force a concrete DTLS role into local SDP (scall JSON alone is not enough for libdatachannel). */
+function patchLocalSetupRole(sdp: string): string {
+  const setupOverride = process.env.RTC_SIGNAL_SETUP?.toLowerCase();
+  if (setupOverride !== "active" && setupOverride !== "passive") {
+    return sdp;
+  }
+  if (/a=setup:(active|passive|actpass)/.test(sdp)) {
+    const next = sdp.replace(/a=setup:(active|passive|actpass)/g, `a=setup:${setupOverride}`);
+    if (next !== sdp) {
+      rootHTTPLogger.info("RtcPeer patched local SDP DTLS role", {
+        to: setupOverride,
+        fromEnv: "RTC_SIGNAL_SETUP",
+      });
+    }
+    return next;
+  }
+  // No setup line — append on the application m-line block (best-effort).
+  return sdp.replace(/(m=application[^\r\n]*\r?\n)/, `$1a=setup:${setupOverride}\r\n`);
 }
 
 function iceCandidateSummary(candidate: string): string {
@@ -251,7 +276,10 @@ export class RtcPeerConnection extends EventEmitter {
     // TURN relay never actually completes connectivity, but gathering it takes ~20s to time
     // out and races with / stalls the DTLS handshake on the good host pair. Skip TURN entirely
     // (host-only) unless explicitly re-enabled, so ICE gathering finishes instantly.
-    const noTurn = process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true";
+    // allowTurn overrides RTC_NO_TURN for short camera-channel live-wake sessions.
+    const noTurn =
+      !this.peerOptions.allowTurn &&
+      (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
     const iceServers: IceServer[] = [];
     if (!noTurn) {
       iceServers.push(
@@ -390,7 +418,7 @@ export class RtcPeerConnection extends EventEmitter {
     this.createDataChannels();
 
     const rawOffer = await offerPromise;
-    const patched = patchAnswerSdp(rawOffer);
+    const patched = patchLocalSetupRole(patchAnswerSdp(rawOffer));
     rootHTTPLogger.info("RtcPeer local SDP offer", sdpHighlights(patched));
     return patched;
   }
@@ -401,9 +429,12 @@ export class RtcPeerConnection extends EventEmitter {
       throw new Error("RtcPeer not initialized");
     }
     let answerSdp = sdpAnswer;
+    const noTurn =
+      !this.peerOptions.allowTurn &&
+      (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
     if ((this.peerOptions.iceTransportPolicy ?? "relay") === "relay") {
       answerSdp = filterSdpRelayCandidates(sdpAnswer);
-    } else if (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true") {
+    } else if (noTurn) {
       answerSdp = stripSdpRelayCandidates(sdpAnswer);
     }
     // T9000 hub returns "a=setup:actpass" in its answer, which is illegal in an SDP answer
@@ -855,7 +886,9 @@ export class RtcPeerConnection extends EventEmitter {
     // completes the DTLS handshake — if one wins the nomination race the ClientHello is black-holed
     // and the handshake stalls ~31s then drops. Restricting to host candidates removes that race so
     // ICE deterministically settles on the working direct LAN pair.
-    const noTurn = process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true";
+    const noTurn =
+      !this.peerOptions.allowTurn &&
+      (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
     if (noTurn && iceCandidateType(candidate) !== "host") {
       return false;
     }

@@ -2,7 +2,13 @@
 
 Design notes for restoring **HomeBase Professional S1 (T9000)** control in Home Assistant after Eufy migrated off legacy TUTK P2P (`UDP :32100`).
 
-**Status:** research complete, implementation in progress (`src/rtc/` probe).
+**Status:** production path in `eufy-security-ws-customrepo` (`3.0.18-wake-v3`).
+
+Hub command path has a soft-TTL of ~360s (SCTP/app-data goes quiet while ICE may stay up). Same-session recovery is unreliable on HA, so production defaults use:
+
+- `RTC_SCTP_MAX_PACKET_BYTES=800` (smaller libsctp PTCS pads; alone is not enough)
+- `RTC_PROACTIVE_RECONNECT_MS=270000` + `RTC_HANDOFF=1` (make-before-break refresh before the cliff)
+- answerer mode (`RTC_CLIENT_OFFER=0`), `RTC_NO_TURN=1` (LAN host ICE)
 
 ## Root cause
 
@@ -108,31 +114,13 @@ Binary WS frames may wrap the same JSON string.
 
 HTTP headers on the WS upgrade alone are **not** sufficient (probe confirmed).
 
-## Implementation phases
+## Implementation status
 
-### Phase 1 — Signaling WS (current)
-
-- [ ] Connect `join?reqtype=nvr` with mega session headers
-- [ ] Parse `{ msgid, data }` envelopes
-- [ ] Receive `scall` / `info` for station SN
-- [ ] Log SDP / ICE hints if sent over WS
-
-### Phase 2 — WebRTC peer
-
-- [ ] Fetch TURN credentials (API TBD — may arrive in WS or REST)
-- [ ] Build `RTCPeerConnection` (Node: `werift` / `@roamhq/wrtc` or similar)
-- [ ] Open `WebrtcDataChannel` + `notify`
-
-### Phase 3 — Command codec
-
-- [ ] Map legacy P2P `command_id` / `cmd` (e.g. 1350 / 9276 PTZ) to data-channel payloads
-- [ ] Floodlight / guard mode commands
-- [ ] Integrate into `Station` class; bypass legacy `P2PClientProtocol` for T9000
-
-### Phase 4 — HA add-on
-
-- [ ] Bump `EUFY_CLIENT_BUILD_ID`, rebuild customrepo add-on
-- [ ] Re-enable automations once `binary_sensor.homebase_s1_connected` is reliable
+- [x] Signaling WS (`join?reqtype=nvr`) + scall / SDP
+- [x] WebRTC peer via libdatachannel; `WebrtcDataChannel` + notify
+- [x] Station command path over RTC (bypass legacy TUTK P2P for T9000)
+- [x] HA add-on overlay with proactive make-before-break handoff
+- [x] Optional swipe/TURN harvest wake after repeated connect failures
 
 ## Ruled out
 

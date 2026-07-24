@@ -101,6 +101,8 @@ export class HTTPApi extends TypedEmitter<HTTPApiEvents> {
   private token: string | null = null;
   private tokenExpiration: Date | null = null;
   private megaRtcCredentials?: MegaRtcCredentials;
+  /** Optional mega-house wake (e.g. `/app/house/get_devs_list`) from {@link EufySecurity}. */
+  private megaCloudWakeHandler?: () => Promise<void>;
   private renewAuthTokenJob?: schedule.Job;
 
   private connected = false;
@@ -1229,6 +1231,34 @@ export class HTTPApi extends TypedEmitter<HTTPApiEvents> {
 
   public getMegaRtcCredentials(): MegaRtcCredentials | null {
     return this.megaRtcCredentials ?? null;
+  }
+
+  /**
+   * Optional mega-house wake (e.g. `/app/house/get_devs_list`) registered by {@link EufySecurity}.
+   * Used when T9000 RTC scall returns 408/486 until the hub is woken via cloud.
+   */
+  public setMegaCloudWakeHandler(handler: (() => Promise<void>) | undefined): void {
+    this.megaCloudWakeHandler = handler;
+  }
+
+  /**
+   * App swipe/open cloud nudge: refresh legacy house lists, then mega house/relation/mqtt APIs.
+   * Does not establish WebRTC by itself — pairs with swipe TURN wake for media-path wake.
+   */
+  public async cloudWakeHouseInventory(): Promise<void> {
+    // security-app house/list — phone swipe hits this path; cheap extra nudge.
+    try {
+      await this.refreshHouseData();
+    } catch (err) {
+      rootHTTPLogger.warn("cloudWakeHouseInventory: refreshHouseData failed", {
+        error: getError(ensureError(err)),
+      });
+    }
+    await this.refreshStationData();
+    await this.refreshDeviceData();
+    if (this.megaCloudWakeHandler) {
+      await this.megaCloudWakeHandler();
+    }
   }
 
   public getAPIBase(): string {
