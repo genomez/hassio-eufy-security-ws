@@ -175,12 +175,13 @@ import {
 import { getError, validValue } from "../utils";
 import { TalkbackStream } from "../p2p/talkback";
 import { start } from "repl";
-import { createHash } from "crypto";
+import { createHash, generateKeyPairSync } from "crypto";
 import { rootHTTPLogger } from "../logging";
 import { RtcSession } from "../rtc/rtcSession";
 import { RtcTurnConfig } from "../rtc/rtcPeer";
 import { StationRtcTransport } from "../rtc/stationRtcTransport";
 import { turnAllocateWake } from "../rtc/turnAllocateWake";
+import { buildPortalPacket } from "../rtc/rtcPacket";
 import {
   HUB_FIRST_CLOUD_REFRESH_DELAY_MS,
   isHubAuthoritativeStationCloudProperty,
@@ -2084,7 +2085,8 @@ export class Station extends TypedEmitter<StationEvents> {
 
   /**
    * Real camera live-view wake using production ICE (LAN host / RTC_NO_TURN).
-   * Unlike relay-only wakes, this can actually open the command channel.
+   * Sends COMMAND_START_LIVESTREAM once the command channel opens — matching the
+   * phone app path that clears hub DTLS wedges (connect alone is not enough).
    */
   private async runCameraLiveWake(
     reason: string,
@@ -2101,12 +2103,15 @@ export class Station extends TypedEmitter<StationEvents> {
     }
 
     const gtoken = createHash("md5").update(creds.userId).digest("hex");
-    rootHTTPLogger.info("T9000 RTC camera live wake — production ICE (app live-view equivalent)", {
+    const adminUserId = this.rawStation.member.admin_user_id;
+    const holdMs = Math.max(8_000, Math.min(timeoutMs, 25_000));
+    rootHTTPLogger.info("T9000 RTC camera live wake — production ICE + START_LIVESTREAM", {
       stationSN: this.getSerial(),
       reason,
       failures: this.rtcReconnectFailures,
       channelId,
       timeoutMs,
+      holdMs,
       iceTransportPolicy: "all",
       allowTurn: false,
     });
@@ -2115,7 +2120,7 @@ export class Station extends TypedEmitter<StationEvents> {
       authToken: creds.authToken,
       gtoken,
       stationSn: this.getSerial(),
-      adminUserId: this.rawStation.member.admin_user_id,
+      adminUserId,
       region: creds.region,
       channelId,
       // Match production path: LAN host ICE. Relay-only never completes on this hub.
@@ -2123,23 +2128,80 @@ export class Station extends TypedEmitter<StationEvents> {
       iceTransportPolicy: "all",
     });
 
+    const sendStartLivestream = (): boolean => {
+      if (!session.isCommandChannelReady()) {
+        return false;
+      }
+      try {
+        const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 1024 });
+        const jwk = publicKey.export({ format: "jwk" });
+        const n = Buffer.from(String(jwk.n), "base64url");
+        const withLead = n[0] === 0 ? n : Buffer.concat([Buffer.from([0]), n]);
+        const encryptkey = withLead.subarray(1).toString("hex");
+        const buf = buildPortalPacket({
+          commandID: CommandType.CMD_DOORBELL_SET_PAYLOAD,
+          channelID: channelId,
+          cmd: ParamType.COMMAND_START_LIVESTREAM,
+          segmen: 1,
+          payload: {
+            account_id: adminUserId,
+            cmd: ParamType.COMMAND_START_LIVESTREAM,
+            commandType: ParamType.COMMAND_START_LIVESTREAM,
+            data: {
+              accountId: adminUserId,
+              camera_type: 0,
+              encryptkey,
+              entrytype: 0,
+              streamtype: 1,
+            },
+          },
+        });
+        const ok = session.sendCommand(buf);
+        rootHTTPLogger.info("T9000 RTC camera live wake START_LIVESTREAM sent", {
+          stationSN: this.getSerial(),
+          channelId,
+          ok,
+        });
+        return ok;
+      } catch (err) {
+        rootHTTPLogger.warn("T9000 RTC camera live wake START_LIVESTREAM failed", {
+          stationSN: this.getSerial(),
+          channelId,
+          error: getError(ensureError(err)),
+        });
+        return false;
+      }
+    };
+
     try {
+      let liveSent = false;
+      session.on("connected", () => {
+        if (!liveSent) {
+          liveSent = true;
+          sendStartLivestream();
+        }
+      });
       await session.connect();
+      if (!liveSent && session.isCommandChannelReady()) {
+        liveSent = true;
+        sendStartLivestream();
+      }
+      // Hold the media session briefly so the hub exits the DTLS wedge path.
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => resolve(), timeoutMs);
+        const timer = setTimeout(() => resolve(), holdMs);
         const done = (): void => {
           clearTimeout(timer);
           resolve();
         };
-        session.once("connected", done);
         session.once("error", done);
         session.once("close", done);
       });
-      const commandChannelReady = session.isCommandChannelReady();
+      const commandChannelReady = session.isCommandChannelReady() || liveSent;
       rootHTTPLogger.info("T9000 RTC camera live wake finished", {
         stationSN: this.getSerial(),
         channelId,
         commandChannelReady,
+        liveSent,
       });
       return { commandChannelReady };
     } catch (err) {
@@ -2157,7 +2219,7 @@ export class Station extends TypedEmitter<StationEvents> {
       } catch {
         /* ignore */
       }
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 750));
     }
   }
 
@@ -3642,7 +3704,7 @@ export class Station extends TypedEmitter<StationEvents> {
       value: value,
     });
     if (
-      (device.isFloodLight() && !device.isFloodLightT8425()) ||
+      (device.isFloodLight() && !device.isFloodLightT8425() && !device.isFloodLightT8426()) ||
       device.isSoloCameraSpotlight1080() ||
       device.isSoloCameraSpotlight2k() ||
       device.isSoloCameraSpotlightSolar() ||
@@ -3668,7 +3730,12 @@ export class Station extends TypedEmitter<StationEvents> {
           property: propertyData,
         }
       );
-    } else if (device.isBatteryDoorbellDualE340() || device.isOutdoorPanAndTiltCamera() || device.isFloodLightT8425()) {
+    } else if (
+      device.isBatteryDoorbellDualE340() ||
+      device.isOutdoorPanAndTiltCamera() ||
+      device.isFloodLightT8425() ||
+      device.isFloodLightT8426()
+    ) {
       this.p2pSession.sendCommandWithStringPayload(
         {
           commandType: CommandType.CMD_DOORBELL_SET_PAYLOAD,

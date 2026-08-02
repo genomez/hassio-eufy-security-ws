@@ -18,6 +18,7 @@
 shell_command:
   eufy_sync_snapshot_times: python3 /config/scripts/sync_eufy_snapshot_times.py
   eufy_sync_flc_stale_lights: python3 /config/scripts/sync_flc_stale_lights.py
+  eufy_sync_flc_stale_lights_ha_start: python3 /config/scripts/sync_flc_stale_lights.py --after-ha-start
 
 
 automation:
