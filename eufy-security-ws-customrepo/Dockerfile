@@ -3,9 +3,9 @@
 FROM ghcr.io/home-assistant/amd64-base:3.23
 
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
-ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#T9000-testing
+ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#passport-profile-response-compat
 # Bump when EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG EUFY_CLIENT_BUILD_ID=wake-v4-20260827a
+ARG EUFY_CLIENT_BUILD_ID=passport-test1-20260827a
 
 COPY rtc-overlay /tmp/rtc-overlay
 
@@ -42,7 +42,6 @@ RUN \
          && cp -a /tmp/rtc-overlay/src/rtc/. /tmp/eufy-security-client/src/rtc/ \
          && cp /tmp/rtc-overlay/src/p2p/session.ts /tmp/eufy-security-client/src/p2p/session.ts \
          && cp /tmp/rtc-overlay/src/http/station.ts /tmp/eufy-security-client/src/http/station.ts \
-         && cp /tmp/rtc-overlay/src/http/api.ts /tmp/eufy-security-client/src/http/api.ts \
          && cp /tmp/rtc-overlay/src/http/utils.ts /tmp/eufy-security-client/src/http/utils.ts \
          && cp /tmp/rtc-overlay/src/http/device.ts /tmp/eufy-security-client/src/http/device.ts \
          && cp /tmp/rtc-overlay/src/http/hubAuthoritative.ts /tmp/eufy-security-client/src/http/hubAuthoritative.ts \
