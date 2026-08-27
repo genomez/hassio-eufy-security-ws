@@ -1212,6 +1212,9 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
         polled,
       });
     }
+    // Mark every successful hub poll as fresh, even when the boolean did not
+    // change. HA verification uses last_updated to reject command-ack state.
+    device.updateProperty(PropertyName.DeviceLight, polled, true);
     this.pendingDeviceLightBySerial.delete(deviceSN);
     this.saveDeviceLightState(deviceSN, polled);
   }
@@ -3051,10 +3054,19 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
           });
         }
       }
+      // A successful floodlight command only means the hub accepted the request.
+      // Keep the HA property unchanged until the follow-up hub poll reports the
+      // device property; otherwise HA can show an optimistic OFF while the lamp
+      // is still physically on.
+      const isFloodlightLightCommand =
+        result.customData?.property?.name === PropertyName.DeviceLight &&
+        (result.command_type === CommandType.CMD_SET_FLOODLIGHT_MANUAL_SWITCH ||
+          result.command_type === CommandType.CMD_DOORBELL_SET_PAYLOAD);
       this.getStationDevice(station.getSerial(), result.channel)
         .then((device: Device) => {
           if (
-            (result.customData !== undefined &&
+            !isFloodlightLightCommand &&
+            ((result.customData !== undefined &&
               result.customData.property !== undefined &&
               !device.isLockWifiR10() &&
               !device.isLockWifiR20() &&
@@ -3075,7 +3087,7 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
                 device.isLockWifiT8510P() ||
                 device.isLockWifiT8520P() ||
                 device.isLockWifiT85L0()) &&
-              result.command_type !== CommandType.CMD_DOORLOCK_SET_PUSH_MODE)
+              result.command_type !== CommandType.CMD_DOORLOCK_SET_PUSH_MODE))
           ) {
             if (device.hasProperty(result.customData.property.name)) {
               const metadata = device.getPropertyMetadata(result.customData.property.name);
@@ -3654,40 +3666,17 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
   }
 
   private onFloodlightManualSwitch(station: Station, channel: number, enabled: boolean): void {
-    // After RTC reconnect the hub can burst stale notify ON; ignore those briefly and poll instead.
-    if (enabled && this.isFloodlightNotifyOnInGrace(station.getSerial())) {
-      rootMainLogger.info("Floodlight notify ON deferred during reconnect grace — polling hub", {
-        stationSN: station.getSerial(),
-        channel,
-      });
-      this.requestFloodlightPoll(station, "notify_on_grace", 500);
-      return;
-    }
-    this.getStationDevice(station.getSerial(), channel)
-      .then((device: Device) => {
-        if (device.hasProperty(PropertyName.DeviceLight)) {
-          const metadataLight = device.getPropertyMetadata(PropertyName.DeviceLight);
-          device.updateRawProperty(metadataLight.key as number, enabled ? "1" : "0", "p2p");
-          // Hub manual-switch events are authoritative; drop any pending HA command and persist.
-          this.pendingDeviceLightBySerial.delete(device.getSerial());
-          this.saveDeviceLightState(device.getSerial(), enabled);
-          rootMainLogger.info("Floodlight manual switch applied", {
-            stationSN: station.getSerial(),
-            deviceSN: device.getSerial(),
-            channel,
-            enabled,
-          });
-        }
-      })
-      .catch((err) => {
-        const error = ensureError(err);
-        rootMainLogger.error(`Station floodlight manual switch error`, {
-          error: getError(error),
-          stationSN: station.getSerial(),
-          channel: channel,
-          enabled: enabled,
-        });
-      });
+    // A command ACK and a notify payload are not authoritative device state.
+    // The same event is produced for both, so always reconcile through the
+    // hub's camera-info property poll before changing the HA light entity.
+    const reconnectGrace = enabled && this.isFloodlightNotifyOnInGrace(station.getSerial());
+    rootMainLogger.info("Floodlight manual switch received — polling hub before applying", {
+      stationSN: station.getSerial(),
+      channel,
+      enabled,
+      reconnectGrace,
+    });
+    this.requestFloodlightPoll(station, "manual_switch_event", reconnectGrace ? 500 : 1500);
   }
 
   private onAuthTokenInvalidated(): void {

@@ -9,7 +9,8 @@ export type RtcInboundDiagKind =
   | "unmatched"
   | "unhandled_portal"
   | "raw_json"
-  | "notify";
+  | "notify"
+  | "camera_info";
 
 export interface RtcInboundDiagEntry {
   kind: RtcInboundDiagKind;
@@ -44,6 +45,7 @@ const KINDS: RtcInboundDiagKind[] = [
   "unhandled_portal",
   "raw_json",
   "notify",
+  "camera_info",
 ];
 
 function emptyCounts(): Record<RtcInboundDiagKind, number> {

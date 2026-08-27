@@ -1,7 +1,7 @@
 import { rootHTTPLogger, rootP2PLogger } from "../logging";
 import { parseJSON } from "../utils";
 import { PushMessage } from "../push/models";
-import { CommandResult, StorageInfoBodyHB3, StorageInfoHB3 } from "../p2p/models";
+import { CmdCameraInfoResponse, CommandResult, StorageInfoBodyHB3, StorageInfoHB3 } from "../p2p/models";
 import { CommandType, ErrorCode } from "../p2p/types";
 import { parsePortalHeader, parsePortalPacket } from "./rtcPacket";
 import { dispatchPortalDatabaseInbound, StationDatabaseInboundSession } from "./stationDatabaseInbound";
@@ -12,6 +12,7 @@ export interface RtcInboundSession {
   getStationSn(): string;
   getP2pDid(): string | undefined;
   emit(event: "command", result: CommandResult): boolean;
+  emit(event: "camera info", cameraInfo: CmdCameraInfoResponse): boolean;
   emit(event: "push notification", message: PushMessage): boolean;
   emit(event: "floodlight manual switch", channel: number, enabled: boolean): boolean;
   emit(event: "hub notify update"): boolean;
@@ -36,6 +37,42 @@ function notifyRtcPollAck(session: RtcInboundSession, commandID: number, errCode
   session.notifyRtcPollAck?.(commandID, errCode ?? 0);
 }
 
+function isCameraInfoResponse(value: unknown): value is CmdCameraInfoResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as { params?: unknown; db_bypass_str?: unknown };
+  return Array.isArray(candidate.params) || Array.isArray(candidate.db_bypass_str);
+}
+
+function emitCameraInfoIfPresent(session: RtcInboundSession, value: unknown): boolean {
+  const candidates: unknown[] = [value];
+  if (typeof value === "object" && value !== null && "payload" in value) {
+    candidates.push((value as { payload?: unknown }).payload);
+  }
+  for (const candidate of candidates) {
+    const parsed = typeof candidate === "string" ? parseJSON(candidate, rootP2PLogger) : candidate;
+    if (!isCameraInfoResponse(parsed)) {
+      continue;
+    }
+    const cameraInfo = parsed as CmdCameraInfoResponse;
+    rootHTTPLogger.info("RtcInbound camera info payload", {
+      stationSN: session.getStationSn(),
+      params: Array.isArray(cameraInfo.params) ? cameraInfo.params.length : 0,
+      dbBypassParams: Array.isArray(cameraInfo.db_bypass_str) ? cameraInfo.db_bypass_str.length : 0,
+    });
+    session.emit("camera info", cameraInfo);
+    recordDiag(session, {
+      kind: "camera_info",
+      linkType: 3,
+      commandID: CommandType.CMD_CAMERA_INFO,
+      bytes: typeof candidate === "string" ? candidate.length : 0,
+    });
+    return true;
+  }
+  return false;
+}
+
 /**
  * Dispatch portal frames that are not matched as pending command acks.
  * linkType mirrors security.eufy.com SCTP channel mapping (1=cmd, 3=notify).
@@ -57,6 +94,9 @@ export function dispatchRtcInbound(session: RtcInboundSession, buf: Buffer, link
         cmd: (parsed as { cmd?: number }).cmd,
         bytes: buf.length,
       });
+      if (emitCameraInfoIfPresent(session, parsed)) {
+        return;
+      }
       handleNotifyJson(session, 0, parsed);
       if (
         dispatchPortalDatabaseInbound(
@@ -130,6 +170,16 @@ function dispatchPortalRtcInbound(session: RtcInboundSession, buf: Buffer, linkT
       bytes: buf.length,
     });
     return;
+  }
+
+  // CMD_CAMERA_INFO is acknowledged on the command channel, then its large
+  // JSON payload arrives as a non-response portal packet on the notify path.
+  // It has no `cmd` wrapper, so the generic notify dispatcher drops it.
+  if (header.commandID === CommandType.CMD_CAMERA_INFO && header.isResponse !== 1) {
+    const cameraInfoPacket = parsePortalPacket(buf, 3);
+    if (cameraInfoPacket !== null && emitCameraInfoIfPresent(session, cameraInfoPacket.data)) {
+      return;
+    }
   }
 
   if (linkType === 1 && header.isResponse === 1) {
