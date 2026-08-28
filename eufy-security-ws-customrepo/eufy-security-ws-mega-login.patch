@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..d008cd3
 --- /dev/null
 +++ b/src/lib/driver/mega_login.ts
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,114 @@
 +import { EufySecurity } from "eufy-security-client";
 +import { ILogObj, Logger } from "tslog";
 +
@@ -11,6 +11,7 @@ index 0000000..d008cd3
 +import { DriverEvent } from "./event.js";
 +import { DriverMessageHandler } from "./message_handler.js";
 +
++let megaLoginAttempted = false;
 +let megaLoginInFlight = false;
 +
 +function notifyVerifyCode(clientsController: ClientsController): void {
@@ -54,13 +55,18 @@ index 0000000..d008cd3
 +  driver: EufySecurity,
 +  clientsController: ClientsController,
 +  logger: Logger<ILogObj>,
++  trigger: "driver-connect-event" | "post-connect-fallback",
 +): Promise<void> {
-+  if (megaLoginInFlight) {
-+    logger.info("v6 mega login: bootstrap already in progress");
++  if (megaLoginAttempted) {
++    logger.info("v6 mega login: bootstrap already attempted", {
++      trigger,
++      inFlight: megaLoginInFlight,
++    });
 +    return;
 +  }
++  megaLoginAttempted = true;
 +  megaLoginInFlight = true;
-+  logger.info("v6 mega login: bootstrap triggered by driver connect");
++  logger.info("v6 mega login: bootstrap triggered", { trigger });
 +  try {
 +    handleMegaLoginResult(
 +      await driver.loginMega(),
@@ -205,15 +211,28 @@ index 6c96af5..00583b0 100755
  import { IncomingMessageDriver } from "./driver/incoming_message.js";
  import { dumpState } from "./state.js";
  import { LogLevel, LoggingEventForwarder } from "./logging.js";
-@@ -712,6 +713,11 @@ export class EufySecurityServer
+@@ -712,6 +713,24 @@ export class EufySecurityServer
      this.logger.info(
        `Eufy Security server listening on host ${this.options.host}, port ${this.options.port}`,
      );
 +    this.driver.on("connect", () => {
 +      if (this.sockets) {
-+        void ensureMegaLogin(this.driver, this.sockets, this.logger);
++        void ensureMegaLogin(
++          this.driver,
++          this.sockets,
++          this.logger,
++          "driver-connect-event",
++        );
 +      }
 +    });
      await this.driver.connect();
++    if (this.sockets) {
++      await ensureMegaLogin(
++        this.driver,
++        this.sockets,
++        this.logger,
++        "post-connect-fallback",
++      );
++    }
    }
  

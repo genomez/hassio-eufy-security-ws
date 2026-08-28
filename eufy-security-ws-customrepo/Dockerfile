@@ -3,9 +3,9 @@
 FROM ghcr.io/home-assistant/amd64-base:3.23
 
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
-ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#passport-profile-response-compat-v3
+ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#passport-profile-response-compat-v4
 # Bump when EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG EUFY_CLIENT_BUILD_ID=passport-test3-20260828b
+ARG EUFY_CLIENT_BUILD_ID=passport-test4-20260828a
 
 COPY rtc-overlay /tmp/rtc-overlay
 

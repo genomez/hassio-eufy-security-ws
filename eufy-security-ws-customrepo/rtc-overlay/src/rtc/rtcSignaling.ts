@@ -60,6 +60,12 @@ export class RtcSignalingClient extends EventEmitter {
   public async fetchSign(): Promise<string> {
     const host = this.opts.smartHost ?? DEFAULT_SMART_HOST;
     const url = `https://${host}/v1/smart/nvr/ws/sign`;
+    rootHTTPLogger.info("RtcSignaling fetchSign context", {
+      host,
+      region: this.opts.region,
+      authTokenPresent: this.opts.authToken.length > 0,
+      gtokenPresent: this.opts.gtoken.length > 0,
+    });
     const res = await fetch(url, {
       headers: {
         "X-Auth-Token": this.opts.authToken,
