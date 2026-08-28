@@ -1,6 +1,6 @@
 name: eufy-security-ws passport profile test
-description: Opt-in test build for flat and nested regional passport profile responses
-version: 3.0.18-passport-test2
+description: Opt-in test build for passport profile and bounded Mega bootstrap diagnostics
+version: 3.0.18-passport-test3
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

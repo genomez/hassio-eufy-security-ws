@@ -1,15 +1,17 @@
 # eufy-security-ws-customrepo
 
 > **Opt-in compatibility test:** This branch builds
-> `genomez/eufy-security-client#passport-profile-response-compat-v2` to test
-> flat and nested regional passport-profile response envelopes. It is separate
-> from the normal `wake-v4` add-on and is not intended as a general update.
+> `genomez/eufy-security-client#passport-profile-response-compat-v3` to test
+> flat and nested regional passport-profile responses plus bounded, redacted
+> first-boot Mega diagnostics. It is separate from the normal `wake-v4` add-on
+> and is not intended as a general update.
 
 **Maintainer:** [genomez](https://github.com/genomez). **`eufy-security-ws-customrepo`** pattern from [MELSAID888](https://github.com/MELSAID888/hassio-eufy-security-ws-customrepo); extended for T9000 on [bropat/hassio-eufy-security-ws](https://github.com/bropat/hassio-eufy-security-ws).
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#passport-profile-response-compat-v2`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#passport-profile-response-compat-v3`)
+- Bounded Mega bootstrap requests with redacted stage diagnostics and no automatic login retry
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery

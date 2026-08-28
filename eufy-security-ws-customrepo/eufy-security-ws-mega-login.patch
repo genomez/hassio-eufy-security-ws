@@ -3,13 +3,15 @@ new file mode 100644
 index 0000000..d008cd3
 --- /dev/null
 +++ b/src/lib/driver/mega_login.ts
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,108 @@
 +import { EufySecurity } from "eufy-security-client";
 +import { ILogObj, Logger } from "tslog";
 +
 +import { ClientsController } from "../server.js";
 +import { DriverEvent } from "./event.js";
 +import { DriverMessageHandler } from "./message_handler.js";
++
++let megaLoginInFlight = false;
 +
 +function notifyVerifyCode(clientsController: ClientsController): void {
 +  clientsController.clients.forEach((client) =>
@@ -53,14 +55,22 @@ index 0000000..d008cd3
 +  clientsController: ClientsController,
 +  logger: Logger<ILogObj>,
 +): Promise<void> {
++  if (megaLoginInFlight) {
++    logger.info("v6 mega login: bootstrap already in progress");
++    return;
++  }
++  megaLoginInFlight = true;
++  logger.info("v6 mega login: bootstrap triggered by driver connect");
 +  try {
 +    handleMegaLoginResult(
 +      await driver.loginMega(),
 +      clientsController,
 +      logger,
 +    );
-+  } catch (error) {
-+    logger.warn("v6 mega login error (legacy push unchanged)", error);
++  } catch {
++    logger.warn("v6 mega login error (details logged by client stage diagnostics)");
++  } finally {
++    megaLoginInFlight = false;
 +  }
 +}
 +
@@ -76,8 +86,8 @@ index 0000000..d008cd3
 +    DriverMessageHandler.tfa = false;
 +    handleMegaLoginResult(result, clientsController, logger);
 +    return result === "ok";
-+  } catch (error) {
-+    logger.warn("v6 mega login verification failed", error);
++  } catch {
++    logger.warn("v6 mega login verification failed");
 +    return false;
 +  }
 +}
@@ -97,8 +107,8 @@ index 0000000..d008cd3
 +    DriverMessageHandler.megaCaptcha = false;
 +    handleMegaLoginResult(result, clientsController, logger);
 +    return result === "ok";
-+  } catch (error) {
-+    logger.warn("v6 mega captcha login failed", error);
++  } catch {
++    logger.warn("v6 mega captcha login failed");
 +    return false;
 +  }
 +}
