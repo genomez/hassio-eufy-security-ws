@@ -5,13 +5,14 @@ FROM ghcr.io/home-assistant/amd64-base:3.23
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
 ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#passport-profile-response-compat-v3
 # Bump when EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG EUFY_CLIENT_BUILD_ID=passport-test3-20260828a
+ARG EUFY_CLIENT_BUILD_ID=passport-test3-20260828b
 
 COPY rtc-overlay /tmp/rtc-overlay
 
 WORKDIR /usr/src/app
 COPY eufy-security-ws-mega-login.patch /tmp/
 
+# Keep eufysecurity.ts from the pinned client branch so its test diagnostics are preserved.
 RUN \
     set -x \
     && echo "EUFY_CLIENT_BUILD_ID=$EUFY_CLIENT_BUILD_ID" \
@@ -46,7 +47,6 @@ RUN \
          && cp /tmp/rtc-overlay/src/http/device.ts /tmp/eufy-security-client/src/http/device.ts \
          && cp /tmp/rtc-overlay/src/http/hubAuthoritative.ts /tmp/eufy-security-client/src/http/hubAuthoritative.ts \
          && cp /tmp/rtc-overlay/src/http/eventImageCache.ts /tmp/eufy-security-client/src/http/eventImageCache.ts \
-         && cp /tmp/rtc-overlay/src/eufysecurity.ts /tmp/eufy-security-client/src/eufysecurity.ts \
          && grep -q 'export \* from "./rtc"' /tmp/eufy-security-client/src/index.ts \
             || printf '\nexport * from "./rtc";\n' >> /tmp/eufy-security-client/src/index.ts \
          && cd /tmp/eufy-security-client \

@@ -7,4 +7,4 @@ codenotary:
 args:
   EUFY_SECURITY_WS_VERSION: 3.0.1
   EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#passport-profile-response-compat-v3"
-  EUFY_CLIENT_BUILD_ID: "passport-test3-20260828a"
+  EUFY_CLIENT_BUILD_ID: "passport-test3-20260828b"
