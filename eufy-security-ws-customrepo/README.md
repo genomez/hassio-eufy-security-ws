@@ -23,3 +23,8 @@ Quick start:
 
 Version `3.0.18-wake-v4` also prevents an early RTC signaling failure from
 leaving an unhandled TURN-harvest timeout that can terminate the add-on.
+
+Version `3.0.18-wake-v5` makes RTC handoff connection and timeout completion a
+single observed promise. A failed or slow replacement connection can no longer
+leave an orphaned `T9000 RTC handoff timeout` rejection that terminates Node;
+the working RTC session is retained for the normal retry/fallback path.

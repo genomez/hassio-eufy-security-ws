@@ -13,6 +13,67 @@ export interface StationRtcTransportEvents {
   handoff: (info: { durationMs: number }) => void;
 }
 
+type RtcConnectWaitSession = Pick<RtcSession, "connect" | "on" | "off">;
+
+/**
+ * Arm the session events and the timeout as one immediately observed promise.
+ * This prevents a failed/slow connect() from leaving a separate timeout promise
+ * behind to reject later as an unhandled rejection.
+ */
+export function connectAndWaitForRtcSession(
+  session: RtcConnectWaitSession,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+
+    const cleanup = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      session.off("connected", onConnected);
+      session.off("error", onError);
+      session.off("close", onClose);
+    };
+    const finish = (error?: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const onConnected = (): void => finish();
+    const onError = (error: unknown): void =>
+      finish(error instanceof Error ? error : new Error(String(error)));
+    const onClose = (): void =>
+      finish(new Error("T9000 RTC handoff closed before connect"));
+
+    session.on("connected", onConnected);
+    session.on("error", onError);
+    session.on("close", onClose);
+    timer = setTimeout(
+      () => finish(new Error("T9000 RTC handoff timeout")),
+      timeoutMs,
+    );
+
+    try {
+      void session
+        .connect()
+        .catch((error: unknown) =>
+          finish(error instanceof Error ? error : new Error(String(error))),
+        );
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
 /**
  * T9000 WebRTC transport — sign → WS auth → scall → data channel.
  * Replaces legacy TUTK P2P for HomeBase Professional S1.
@@ -36,8 +97,8 @@ export class StationRtcTransport extends EventEmitter {
     // handshake retries promptly. Tunable via RTC_CONNECT_TIMEOUT_MS.
     private readonly connectTimeoutMs = Math.max(
       10000,
-      Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? "45000") || 45000
-    )
+      Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? "45000") || 45000,
+    ),
   ) {
     super();
   }
@@ -67,7 +128,9 @@ export class StationRtcTransport extends EventEmitter {
     this.session = session;
     this.wirePrimarySession(session);
 
-    rootHTTPLogger.info("StationRtcTransport connecting", { stationSn: this.stationSn });
+    rootHTTPLogger.info("StationRtcTransport connecting", {
+      stationSn: this.stationSn,
+    });
 
     try {
       await session.connect();
@@ -130,9 +193,12 @@ export class StationRtcTransport extends EventEmitter {
       }
     }
     if (this.handoffInProgress || this.connecting) {
-      rootHTTPLogger.debug("StationRtcTransport handoff skipped — already in progress", {
-        stationSn: this.stationSn,
-      });
+      rootHTTPLogger.debug(
+        "StationRtcTransport handoff skipped — already in progress",
+        {
+          stationSn: this.stationSn,
+        },
+      );
       return false;
     }
 
@@ -141,48 +207,19 @@ export class StationRtcTransport extends EventEmitter {
     const startedAt = Date.now();
     const newSession = this.createSession();
 
-    rootHTTPLogger.info("StationRtcTransport handoff starting — second session while first stays up", {
-      stationSn: this.stationSn,
-    });
+    rootHTTPLogger.info(
+      "StationRtcTransport handoff starting — second session while first stays up",
+      {
+        stationSn: this.stationSn,
+      },
+    );
 
-    let settled = false;
-    const waitConnected = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          reject(new Error("T9000 RTC handoff timeout"));
-        }
-      }, this.connectTimeoutMs);
-
-      newSession.on("connected", () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve();
-        }
-      });
-      newSession.on("error", (err) => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
-      newSession.on("close", () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          reject(new Error("T9000 RTC handoff closed before connect"));
-        }
-      });
-      newSession.on("commandData", (data, linkType) => {
-        this.commandDataHandler?.(data, linkType);
-      });
+    newSession.on("commandData", (data, linkType) => {
+      this.commandDataHandler?.(data, linkType);
     });
 
     try {
-      await newSession.connect();
-      await waitConnected;
+      await connectAndWaitForRtcSession(newSession, this.connectTimeoutMs);
 
       // Swap before retiring old so sendCommand uses the new channel immediately.
       this.session = newSession;
@@ -207,11 +244,14 @@ export class StationRtcTransport extends EventEmitter {
       return true;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      rootHTTPLogger.warn("StationRtcTransport handoff failed — keeping existing session", {
-        stationSn: this.stationSn,
-        error: error.message,
-        durationMs: Date.now() - startedAt,
-      });
+      rootHTTPLogger.warn(
+        "StationRtcTransport handoff failed — keeping existing session",
+        {
+          stationSn: this.stationSn,
+          error: error.message,
+          durationMs: Date.now() - startedAt,
+        },
+      );
       try {
         newSession.removeAllListeners();
         newSession.close();
@@ -239,7 +279,9 @@ export class StationRtcTransport extends EventEmitter {
     return this.session?.sendCommand(data) ?? false;
   }
 
-  public onCommandData(handler: (data: Buffer, linkType?: number) => void): void {
+  public onCommandData(
+    handler: (data: Buffer, linkType?: number) => void,
+  ): void {
     this.commandDataHandler = handler;
   }
 
@@ -257,7 +299,9 @@ export class StationRtcTransport extends EventEmitter {
   }
 
   private createSession(): RtcSession {
-    const gtoken = createHash("md5").update(this.credentials.userId).digest("hex");
+    const gtoken = createHash("md5")
+      .update(this.credentials.userId)
+      .digest("hex");
     return new RtcSession({
       authToken: this.credentials.authToken,
       gtoken,
