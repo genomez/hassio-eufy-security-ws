@@ -1,6 +1,6 @@
-name: eufy-security-ws passport profile test
-description: Opt-in test build for post-connect Mega bootstrap and redacted RTC diagnostics
-version: 3.0.18-passport-test4
+name: eufy-security-ws passport runtime provenance test
+description: Opt-in test build verifying the packaged Mega bootstrap and RTC diagnostics
+version: 3.0.18-passport-test5
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

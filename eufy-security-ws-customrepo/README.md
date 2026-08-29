@@ -14,6 +14,7 @@ Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 - Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#passport-profile-response-compat-v4`)
 - Bounded Mega bootstrap requests with redacted stage diagnostics and no automatic login retry
 - Once-guarded post-connect bootstrap fallback when the driver event is not emitted
+- Fail-fast startup provenance for the compiled WebSocket bootstrap and RTC diagnostic paths
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery

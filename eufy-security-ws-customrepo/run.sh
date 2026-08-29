@@ -2,6 +2,58 @@
 
 CONFIG_PATH=/data/eufy-security-ws-config.json
 
+# Reporter-only test guard: prove which compiled server/client files the add-on will execute.
+# This runs before configuration values are read and never logs credentials or session data.
+WS_ROOT=/usr/src/app/node_modules/eufy-security-ws
+WS_ENTRY="$WS_ROOT/dist/bin/server.js"
+WS_SERVER="$WS_ROOT/dist/lib/server.js"
+WS_MEGA_LOGIN="$WS_ROOT/dist/lib/driver/mega_login.js"
+PROVENANCE_FAILED=0
+
+check_provenance_marker() {
+    local label="$1"
+    local file="$2"
+    local marker="$3"
+    if [ ! -f "$file" ]; then
+        bashio::log.error "TEST_PROVENANCE missing_file label=${label} path=${file}"
+        PROVENANCE_FAILED=1
+        return
+    fi
+    if ! grep -Fq "$marker" "$file"; then
+        bashio::log.error "TEST_PROVENANCE missing_marker label=${label} path=${file}"
+        PROVENANCE_FAILED=1
+        return
+    fi
+    bashio::log.info "TEST_PROVENANCE marker_ok label=${label} path=${file} sha256=$(sha256sum "$file" | awk '{print $1}')"
+}
+
+if [ ! -f "$WS_ENTRY" ]; then
+    bashio::log.error "TEST_PROVENANCE missing_file label=ws_entry path=${WS_ENTRY}"
+    exit 1
+fi
+
+CLIENT_ENTRY="$(
+    /usr/bin/node --input-type=module - "$WS_ENTRY" <<'NODE'
+import { createRequire } from "node:module";
+const requireFromWs = createRequire(process.argv[2]);
+process.stdout.write(requireFromWs.resolve("eufy-security-client"));
+NODE
+)"
+CLIENT_ROOT="${CLIENT_ENTRY%%/build/*}"
+CLIENT_RTC_SIGNALING="$CLIENT_ROOT/build/rtc/rtcSignaling.js"
+
+bashio::log.info "TEST_PROVENANCE build=${EUFY_TEST_BUILD_ID:-unknown} ws_version=$(jq -r .version "$WS_ROOT/package.json") client_version=$(jq -r .version "$CLIENT_ROOT/package.json")"
+bashio::log.info "TEST_PROVENANCE resolved ws_entry=${WS_ENTRY} client_entry=${CLIENT_ENTRY}"
+check_provenance_marker "ws_post_connect_fallback" "$WS_SERVER" "post-connect-fallback"
+check_provenance_marker "ws_mega_bootstrap" "$WS_MEGA_LOGIN" "v6 mega login: bootstrap triggered"
+check_provenance_marker "client_rtc_context" "$CLIENT_RTC_SIGNALING" "RtcSignaling fetchSign context"
+
+if [ "$PROVENANCE_FAILED" -ne 0 ]; then
+    bashio::log.error "TEST_PROVENANCE failed; refusing to start an incomplete test image"
+    exit 1
+fi
+bashio::log.info "TEST_PROVENANCE complete status=ok"
+
 USERNAME="$(bashio::config 'username')"
 PASSWORD="$(bashio::config 'password')"
 COUNTRY="$(bashio::config 'country')"
