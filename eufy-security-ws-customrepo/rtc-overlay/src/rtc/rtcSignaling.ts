@@ -5,10 +5,16 @@ import { rootHTTPLogger } from "../logging";
 import {
   DEFAULT_RTC_WS_PATH,
   DEFAULT_SMART_HOST,
+  EU_SMART_HOST,
   RtcInnerMessage,
   RtcSignalingOptions,
   RtcWsEnvelope,
 } from "./types";
+
+/** Narrow regional test: only FR changes; explicit smartHost callers always win. */
+export function defaultSmartHostForRegion(region?: string): string {
+  return region?.trim().toUpperCase() === "FR" ? EU_SMART_HOST : DEFAULT_SMART_HOST;
+}
 
 export interface RtcSignalingEvents {
   message: (inner: RtcInnerMessage, envelope: RtcWsEnvelope) => void;
@@ -38,13 +44,14 @@ export class RtcSignalingClient extends EventEmitter {
     RtcSignalingOptions;
 
   constructor(options: RtcSignalingOptions) {
+    const region = options.region?.trim().toUpperCase() || "US";
     super();
     this.opts = {
-      smartHost: DEFAULT_SMART_HOST,
       source: "WEB",
       connectTimeoutMs: 15000,
-      region: "US",
       ...options,
+      region,
+      smartHost: options.smartHost ?? defaultSmartHostForRegion(region),
     };
   }
 
