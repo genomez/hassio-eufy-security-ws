@@ -1,6 +1,6 @@
-name: eufy-security-ws Mega request correlation test
-description: Opt-in test build correlating Mega bootstrap, queue lifecycle, and cloud-wake session state
-version: 3.0.18-passport-test7
+name: eufy-security-ws FR RTC signaling host test
+description: Opt-in FR-only test selecting the EU T9000 RTC signaling endpoint
+version: 3.0.18-rtc-eu-test8
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

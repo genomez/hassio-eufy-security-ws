@@ -3,9 +3,9 @@
 FROM ghcr.io/home-assistant/amd64-base:3.23
 
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
-ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#passport-key-exchange-correlation-v7
+ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#rtc-eu-signaling-host-v8
 # Bump when EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG EUFY_CLIENT_BUILD_ID=passport-test7-mega-correlation-20260830a
+ARG EUFY_CLIENT_BUILD_ID=rtc-eu-test8-signaling-host-20260830a
 ENV EUFY_TEST_BUILD_ID=${EUFY_CLIENT_BUILD_ID}
 
 COPY rtc-overlay /tmp/rtc-overlay
