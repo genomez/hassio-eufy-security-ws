@@ -62,6 +62,7 @@ check_provenance_marker "client_rtc_context" "$CLIENT_RTC_SIGNALING" "RtcSignali
 check_provenance_marker "client_rtc_eu_host" "$CLIENT_RTC_TYPES" "security-smart-eu.eufylife.com"
 check_provenance_marker "client_rtc_web_country" "$CLIENT_RTC_SIGNALING" '"Web-Country"'
 check_provenance_marker "client_rtc_web_origin" "$CLIENT_RTC_SIGNALING" "https://security.eufy.com"
+check_provenance_marker "client_rtc_signaling_region" "$CLIENT_RTC_SIGNALING" "signalingRegion"
 check_provenance_marker "client_mega_lifecycle_queued" "$CLIENT_MEGA_API" "MegaApi lifecycle queued"
 check_provenance_marker "client_mega_lifecycle_started" "$CLIENT_MEGA_API" "MegaApi lifecycle HTTP started"
 check_provenance_marker "client_mega_lifecycle_timeout" "$CLIENT_MEGA_API" "MEGA_REQUEST_LIFECYCLE_TIMEOUT"

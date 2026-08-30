@@ -1,6 +1,6 @@
-name: eufy-security-ws FR RTC portal header test
-description: Opt-in FR test matching the current Eufy web portal RTC sign request
-version: 3.0.18-rtc-headers-test9
+name: eufy-security-ws FR RTC EU subprotocol test
+description: Opt-in FR test using EU in the RTC WebSocket authentication payload
+version: 3.0.18-rtc-region-test10
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

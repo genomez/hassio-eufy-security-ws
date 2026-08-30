@@ -16,6 +16,12 @@ export function defaultSmartHostForRegion(region?: string): string {
   return region?.trim().toUpperCase() === "FR" ? EU_SMART_HOST : DEFAULT_SMART_HOST;
 }
 
+/** The portal sends its EU cluster, not the FR country, in the WebSocket auth payload. */
+export function defaultSignalingRegionForCountry(country?: string): string {
+  const normalized = country?.trim().toUpperCase() || "US";
+  return normalized === "FR" ? "EU" : normalized;
+}
+
 export interface RtcSignalingEvents {
   message: (inner: RtcInnerMessage, envelope: RtcWsEnvelope) => void;
   open: () => void;
@@ -97,8 +103,9 @@ export class RtcSignalingClient extends EventEmitter {
       return;
     }
     const sign = this.sign ?? (await this.fetchSign());
+    const signalingRegion = defaultSignalingRegionForCountry(this.opts.region);
     const subprotoPayload = {
-      region: this.opts.region,
+      region: signalingRegion,
       type: "NVR",
       sn: this.opts.stationSn,
       token: this.opts.authToken,
@@ -110,7 +117,11 @@ export class RtcSignalingClient extends EventEmitter {
     const subproto = base64urlJson(subprotoPayload);
     const url = this.getWsUrl();
 
-    rootHTTPLogger.info("RtcSignaling connecting", { url, stationSn: this.opts.stationSn });
+    rootHTTPLogger.info("RtcSignaling connecting", {
+      url,
+      webCountry: this.opts.region,
+      signalingRegion,
+    });
 
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {

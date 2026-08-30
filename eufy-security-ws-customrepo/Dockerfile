@@ -3,9 +3,9 @@
 FROM ghcr.io/home-assistant/amd64-base:3.23
 
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
-ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#rtc-portal-sign-headers-v9
+ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#rtc-eu-subprotocol-region-v10
 # Bump when EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG EUFY_CLIENT_BUILD_ID=rtc-headers-test9-web-profile-20260830a
+ARG EUFY_CLIENT_BUILD_ID=rtc-region-test10-eu-subprotocol-20260830a
 ENV EUFY_TEST_BUILD_ID=${EUFY_CLIENT_BUILD_ID}
 
 COPY rtc-overlay /tmp/rtc-overlay
