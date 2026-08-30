@@ -61,6 +61,11 @@ check_provenance_marker "client_rtc_context" "$CLIENT_RTC_SIGNALING" "RtcSignali
 check_provenance_marker "client_mega_lifecycle_queued" "$CLIENT_MEGA_API" "MegaApi lifecycle queued"
 check_provenance_marker "client_mega_lifecycle_started" "$CLIENT_MEGA_API" "MegaApi lifecycle HTTP started"
 check_provenance_marker "client_mega_lifecycle_timeout" "$CLIENT_MEGA_API" "MEGA_REQUEST_LIFECYCLE_TIMEOUT"
+check_provenance_marker "client_mega_instance" "$CLIENT_MEGA_API" "MegaApi diagnostic instance initialized"
+check_provenance_marker "client_mega_watchdog" "$CLIENT_MEGA_API" "MegaApi lifecycle watchdog armed"
+check_provenance_marker "client_mega_dispatched" "$CLIENT_MEGA_API" "MegaApi lifecycle dispatched"
+check_provenance_marker "client_mega_key_begin" "$CLIENT_MEGA_API" "MegaApi key/exchange begin"
+check_provenance_marker "client_mega_session_gate" "$CLIENT_ROOT/build/eufysecurity.js" "v6 cloud wake: session gate"
 
 if [ "$PROVENANCE_FAILED" -ne 0 ]; then
     bashio::log.error "TEST_PROVENANCE failed; refusing to start an incomplete test image"

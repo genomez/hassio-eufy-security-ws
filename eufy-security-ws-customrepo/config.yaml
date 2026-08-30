@@ -1,6 +1,6 @@
-name: eufy-security-ws startup phase and Mega lifecycle test
-description: Opt-in test build isolating startup exit and Mega key-exchange lifecycle
-version: 3.0.18-passport-test6b
+name: eufy-security-ws Mega request correlation test
+description: Opt-in test build correlating Mega bootstrap, queue lifecycle, and cloud-wake session state
+version: 3.0.18-passport-test7
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false
