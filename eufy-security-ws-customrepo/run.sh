@@ -51,6 +51,7 @@ NODE
 )"
 CLIENT_ROOT="${CLIENT_ENTRY%%/build/*}"
 CLIENT_RTC_SIGNALING="$CLIENT_ROOT/build/rtc/rtcSignaling.js"
+CLIENT_RTC_TYPES="$CLIENT_ROOT/build/rtc/types.js"
 CLIENT_MEGA_API="$CLIENT_ROOT/build/http/megaApi.js"
 
 bashio::log.info "TEST_PROVENANCE build=${EUFY_TEST_BUILD_ID:-unknown} ws_version=$(jq -r .version "$WS_ROOT/package.json") client_version=$(jq -r .version "$CLIENT_ROOT/package.json")"
@@ -58,7 +59,7 @@ bashio::log.info "TEST_PROVENANCE resolved ws_entry=${WS_ENTRY} client_entry=${C
 check_provenance_marker "ws_post_connect_fallback" "$WS_SERVER" "post-connect-fallback"
 check_provenance_marker "ws_mega_bootstrap" "$WS_MEGA_LOGIN" "v6 mega login: bootstrap triggered"
 check_provenance_marker "client_rtc_context" "$CLIENT_RTC_SIGNALING" "RtcSignaling fetchSign context"
-check_provenance_marker "client_rtc_eu_host" "$CLIENT_RTC_SIGNALING" "security-smart-eu.eufylife.com"
+check_provenance_marker "client_rtc_eu_host" "$CLIENT_RTC_TYPES" "security-smart-eu.eufylife.com"
 check_provenance_marker "client_mega_lifecycle_queued" "$CLIENT_MEGA_API" "MegaApi lifecycle queued"
 check_provenance_marker "client_mega_lifecycle_started" "$CLIENT_MEGA_API" "MegaApi lifecycle HTTP started"
 check_provenance_marker "client_mega_lifecycle_timeout" "$CLIENT_MEGA_API" "MEGA_REQUEST_LIFECYCLE_TIMEOUT"
