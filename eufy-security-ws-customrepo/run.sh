@@ -194,6 +194,7 @@ if [ "$IPV4FIRST_VALUE" = "true" ]; then
 fi
 
 # T9000 WebRTC: bind ICE host candidates to the LAN interface that reaches the hub.
+TEST_STARTUP_PHASE=rtc_bind_discovery
 FIRST_STATION_IP=""
 if [ -n "$STATIONS_CONFIG" ] && [ "$STATIONS_CONFIG" != "null" ]; then
     while read -r data; do
@@ -207,19 +208,24 @@ if [ -n "$STATIONS_CONFIG" ] && [ "$STATIONS_CONFIG" != "null" ]; then
     done <<<"$STATIONS_CONFIG"
 fi
 if [ -n "$FIRST_STATION_IP" ]; then
-    RTC_BIND_ADDRESS="$(ip -4 route get "$FIRST_STATION_IP" 2>/dev/null | awk '/src/ { for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+    if ! RTC_BIND_ADDRESS="$(ip -4 route get "$FIRST_STATION_IP" 2>/dev/null | awk '/src/ { for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"; then
+        RTC_BIND_ADDRESS=""
+    fi
     if [ -n "$RTC_BIND_ADDRESS" ]; then
         export RTC_BIND_ADDRESS
         bashio::log.info "RTC_BIND_ADDRESS=${RTC_BIND_ADDRESS} (route to ${FIRST_STATION_IP})"
     fi
 fi
 if [ -z "${RTC_BIND_ADDRESS:-}" ]; then
-    RTC_BIND_ADDRESS="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if ! RTC_BIND_ADDRESS="$(hostname -I 2>/dev/null | awk '{print $1}')"; then
+        RTC_BIND_ADDRESS=""
+    fi
     if [ -n "$RTC_BIND_ADDRESS" ]; then
         export RTC_BIND_ADDRESS
         bashio::log.info "RTC_BIND_ADDRESS=${RTC_BIND_ADDRESS} (hostname -I)"
     fi
 fi
+bashio::log.info "TEST_STARTUP rtc_bind_discovery status=ok address_present=$([ -n "${RTC_BIND_ADDRESS:-}" ] && echo true || echo false)"
 
 # RTC_VERBOSE dumps raw signaling frames + libdatachannel debug (very high volume). Keep off for
 # normal operation, set to 1 only when debugging RTC. NOTE: the T9000 DTLS handshake is timing
