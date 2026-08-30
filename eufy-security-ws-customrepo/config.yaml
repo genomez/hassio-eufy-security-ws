@@ -1,6 +1,6 @@
-name: eufy-security-ws FR RTC signaling host test
-description: Opt-in FR-only test selecting the EU T9000 RTC signaling endpoint
-version: 3.0.18-rtc-eu-test8
+name: eufy-security-ws FR RTC portal header test
+description: Opt-in FR test matching the current Eufy web portal RTC sign request
+version: 3.0.18-rtc-headers-test9
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

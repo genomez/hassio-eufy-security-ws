@@ -70,17 +70,18 @@ export class RtcSignalingClient extends EventEmitter {
     rootHTTPLogger.info("RtcSignaling fetchSign context", {
       host,
       region: this.opts.region,
+      requestProfile: "web-portal",
       authTokenPresent: this.opts.authToken.length > 0,
       gtokenPresent: this.opts.gtoken.length > 0,
     });
     const res = await fetch(url, {
       headers: {
+        "Web-Country": this.opts.region,
         "X-Auth-Token": this.opts.authToken,
-        GToken: this.opts.gtoken,
         "App-Name": "eufy_mega",
         "Model-Type": "WEB",
-        Country: this.opts.region,
-        Language: "en",
+        GToken: this.opts.gtoken,
+        Origin: "https://security.eufy.com",
       },
     });
     const body = (await res.json()) as { code?: number; data?: string; msg?: string };
