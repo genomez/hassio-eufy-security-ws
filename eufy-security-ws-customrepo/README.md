@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#T9000-testing`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-stable-v1`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -28,3 +28,12 @@ Version `3.0.18-wake-v5` makes RTC handoff connection and timeout completion a
 single observed promise. A failed or slow replacement connection can no longer
 leave an orphaned `T9000 RTC handoff timeout` rejection that terminates Node;
 the working RTC session is retained for the normal retry/fallback path.
+
+## Regional RTC candidate
+
+Version `3.0.18-regional-rtc-rc1` is an opt-in validation candidate based on
+`wake-v5`. It adds compatibility for both flat and nested passport-profile
+responses and, for country `FR`, uses Eufy's EU RTC host, portal-compatible sign
+headers, and `EU` in the WebSocket authentication payload. Other countries keep
+their existing signaling defaults. Empty or NUL-padded-empty inbound database
+payloads are ignored without producing a misleading JSON parse warning.

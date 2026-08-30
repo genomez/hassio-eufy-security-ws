@@ -36,6 +36,9 @@ export interface StationDatabaseInboundSession {
 
 function normalizeInboundJson(data: unknown): unknown {
   if (typeof data === "string") {
+    if (data.replace(/[\0]+$/g, "").trim().length === 0) {
+      return undefined;
+    }
     return parseJSON(data, rootP2PLogger);
   }
   return data;
@@ -155,9 +158,10 @@ export function handleStationDatabaseResponse(
         if (databaseResponse.data !== undefined && (databaseResponse.data as unknown as string) !== "[]") {
           data = databaseResponse.data as Array<P2PDatabaseQueryLocalResponse>;
         }
-        const result: SortedMap<number, Partial<DatabaseQueryLocal>> = new SortedMap<number, Partial<DatabaseQueryLocal>>(
-          (a: number, b: number) => a - b
-        );
+        const result: SortedMap<number, Partial<DatabaseQueryLocal>> = new SortedMap<
+          number,
+          Partial<DatabaseQueryLocal>
+        >((a: number, b: number) => a - b);
         for (const record of data) {
           for (const tableRecord of record.payload) {
             let tmpRecord = result.get(tableRecord.record_id);

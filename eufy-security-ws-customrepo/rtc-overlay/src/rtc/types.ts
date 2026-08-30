@@ -47,6 +47,8 @@ export interface RtcSignalingOptions {
 
 export const DEFAULT_RTC_WS_PATH = "/v1/rtc/ws/join?reqtype=nvr";
 export const DEFAULT_SMART_HOST = "security-smart.eufylife.com";
+/** Candidate regional signaling service used by the official EU web path. */
+export const EU_SMART_HOST = "security-smart-eu.eufylife.com";
 
 /** eufy_mega session fields used for T9000 WebRTC signaling. */
 export interface MegaRtcCredentials {

@@ -84,6 +84,11 @@ import {
 import { getNullTerminatedString } from "../p2p/utils";
 import { rootHTTPLogger } from "../logging";
 import { MegaRtcCredentials } from "../rtc/types";
+import {
+  describePassportProfileEnvelope,
+  extractPassportProfileCiphertext,
+  isPassportProfileResponse,
+} from "./passportProfileResponse";
 
 type pThrottledFunction = <F extends AnyFunction>(function_: F) => ThrottledFunction<F>;
 
@@ -1810,28 +1815,28 @@ export class HTTPApi extends TypedEmitter<HTTPApiEvents> {
         endpoint: "v2/passport/profile",
       });
       if (response.status == 200) {
-        const result: ResultResponse = response.data;
-        if (result.code == ResponseErrorCode.CODE_OK) {
-          if (result.data) {
-            const profile = this.decryptAPIData(result.data) as PassportProfileResponse;
+        const ciphertext = extractPassportProfileCiphertext(response.data);
+        if (ciphertext !== undefined) {
+          const profile = this.decryptAPIData(ciphertext) as unknown;
+          if (isPassportProfileResponse(profile)) {
             rootHTTPLogger.debug("Get passport profile - Decrypted passport profile data", { profile: profile });
             this.persistentData.user_id = profile.user_id;
             this.persistentData.nick_name = profile.nick_name;
             this.persistentData.email = profile.email;
             return profile;
           }
+          rootHTTPLogger.error("Get passport profile - Decrypted profile is invalid", {
+            envelope: describePassportProfileEnvelope(response.data),
+          });
         } else {
-          rootHTTPLogger.error("Get passport profile - Response code not ok", {
-            code: result.code,
-            msg: result.msg,
-            data: response.data,
+          rootHTTPLogger.error("Get passport profile - Response envelope not supported", {
+            envelope: describePassportProfileEnvelope(response.data),
           });
         }
       } else {
         rootHTTPLogger.error("Get passport profile - Status return code not 200", {
           status: response.status,
           statusText: response.statusText,
-          data: response.data,
         });
       }
     } catch (err) {

@@ -1,6 +1,6 @@
-name: eufy-security-ws-customrepo
-description: Eufy Security ws with editable build.yaml (custom client git + auto loginMega for eufy_mega push)
-version: 3.0.18-wake-v5
+name: eufy-security-ws regional RTC candidate
+description: Opt-in stable candidate for passport-profile and FR/EU RTC compatibility
+version: 3.0.18-regional-rtc-rc1
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false
@@ -9,7 +9,7 @@ map:
 arch:
   - aarch64
   - amd64
-stage: stable
+stage: experimental
 host_network: true
 apparmor: false
 timeout: 30

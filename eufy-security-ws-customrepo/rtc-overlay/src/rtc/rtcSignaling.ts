@@ -5,10 +5,22 @@ import { rootHTTPLogger } from "../logging";
 import {
   DEFAULT_RTC_WS_PATH,
   DEFAULT_SMART_HOST,
+  EU_SMART_HOST,
   RtcInnerMessage,
   RtcSignalingOptions,
   RtcWsEnvelope,
 } from "./types";
+
+/** Narrow regional test: only FR changes; explicit smartHost callers always win. */
+export function defaultSmartHostForRegion(region?: string): string {
+  return region?.trim().toUpperCase() === "FR" ? EU_SMART_HOST : DEFAULT_SMART_HOST;
+}
+
+/** The portal sends its EU cluster, not the FR country, in the WebSocket auth payload. */
+export function defaultSignalingRegionForCountry(country?: string): string {
+  const normalized = country?.trim().toUpperCase() || "US";
+  return normalized === "FR" ? "EU" : normalized;
+}
 
 export interface RtcSignalingEvents {
   message: (inner: RtcInnerMessage, envelope: RtcWsEnvelope) => void;
@@ -38,13 +50,14 @@ export class RtcSignalingClient extends EventEmitter {
     RtcSignalingOptions;
 
   constructor(options: RtcSignalingOptions) {
+    const region = options.region?.trim().toUpperCase() || "US";
     super();
     this.opts = {
-      smartHost: DEFAULT_SMART_HOST,
       source: "WEB",
       connectTimeoutMs: 15000,
-      region: "US",
       ...options,
+      region,
+      smartHost: options.smartHost ?? defaultSmartHostForRegion(region),
     };
   }
 
@@ -62,12 +75,12 @@ export class RtcSignalingClient extends EventEmitter {
     const url = `https://${host}/v1/smart/nvr/ws/sign`;
     const res = await fetch(url, {
       headers: {
+        "Web-Country": this.opts.region,
         "X-Auth-Token": this.opts.authToken,
-        GToken: this.opts.gtoken,
         "App-Name": "eufy_mega",
         "Model-Type": "WEB",
-        Country: this.opts.region,
-        Language: "en",
+        GToken: this.opts.gtoken,
+        Origin: "https://security.eufy.com",
       },
     });
     const body = (await res.json()) as { code?: number; data?: string; msg?: string };
@@ -83,8 +96,9 @@ export class RtcSignalingClient extends EventEmitter {
       return;
     }
     const sign = this.sign ?? (await this.fetchSign());
+    const signalingRegion = defaultSignalingRegionForCountry(this.opts.region);
     const subprotoPayload = {
-      region: this.opts.region,
+      region: signalingRegion,
       type: "NVR",
       sn: this.opts.stationSn,
       token: this.opts.authToken,
@@ -96,7 +110,11 @@ export class RtcSignalingClient extends EventEmitter {
     const subproto = base64urlJson(subprotoPayload);
     const url = this.getWsUrl();
 
-    rootHTTPLogger.info("RtcSignaling connecting", { url, stationSn: this.opts.stationSn });
+    rootHTTPLogger.info("RtcSignaling connecting", {
+      url,
+      webCountry: this.opts.region,
+      signalingRegion,
+    });
 
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
