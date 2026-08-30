@@ -1,6 +1,16 @@
 #!/usr/bin/with-contenv bashio
 
 CONFIG_PATH=/data/eufy-security-ws-config.json
+OPTIONS_PATH=/data/options.json
+TEST_STARTUP_PHASE=entry
+
+test_startup_exit() {
+    local status=$?
+    if [ "$status" -ne 0 ]; then
+        bashio::log.error "TEST_STARTUP exit phase=${TEST_STARTUP_PHASE} code=${status}" || true
+    fi
+}
+trap test_startup_exit EXIT
 
 # Reporter-only test guard: prove which compiled server/client files the add-on will execute.
 # This runs before configuration values are read and never logs credentials or session data.
@@ -58,42 +68,98 @@ if [ "$PROVENANCE_FAILED" -ne 0 ]; then
 fi
 bashio::log.info "TEST_PROVENANCE complete status=ok"
 
-USERNAME="$(bashio::config 'username')"
-PASSWORD="$(bashio::config 'password')"
-COUNTRY="$(bashio::config 'country')"
-EVENT_DURATION_SECONDS="$(bashio::config 'event_duration')"
-POLLING_INTERVAL_MINUTES="$(bashio::config 'polling_interval')"
-ACCEPT_INVITATIONS="$(bashio::config 'accept_invitations')"
-TRUSTED_DEVICE_NAME="$(bashio::config 'trusted_device_name')"
+TEST_STARTUP_PHASE=options_file_preflight
+if [ ! -r "$OPTIONS_PATH" ]; then
+    bashio::log.error "TEST_STARTUP options_file readable=false"
+    exit 1
+fi
+if ! OPTIONS_PRESENCE="$(
+    jq -r '[
+      (.username? | type == "string" and length > 0),
+      (.password? | type == "string" and length > 0),
+      (.country? | type == "string" and length > 0),
+      ((.country? // "") | ascii_upcase == "FR")
+    ] | @tsv' "$OPTIONS_PATH"
+)"; then
+    bashio::log.error "TEST_STARTUP options_file readable=true valid_json=false"
+    exit 1
+fi
+IFS=$'\t' read -r OPTIONS_USERNAME_PRESENT OPTIONS_PASSWORD_PRESENT OPTIONS_COUNTRY_PRESENT OPTIONS_COUNTRY_IS_FR <<< "$OPTIONS_PRESENCE"
+bashio::log.info "TEST_STARTUP options_file readable=true valid_json=true username_present=${OPTIONS_USERNAME_PRESENT} password_present=${OPTIONS_PASSWORD_PRESENT} country_present=${OPTIONS_COUNTRY_PRESENT} country_is_fr=${OPTIONS_COUNTRY_IS_FR}"
+
+USERNAME=""
+PASSWORD=""
+COUNTRY=""
+EVENT_DURATION_SECONDS=""
+POLLING_INTERVAL_MINUTES=""
+ACCEPT_INVITATIONS=""
+TRUSTED_DEVICE_NAME=""
+STATIONS_CONFIG=""
+PORT_VALUE=""
+DEBUG_VALUE=""
+IPV4FIRST_VALUE=""
+
+read_config_option() {
+    local destination="$1"
+    local key="$2"
+    local value=""
+    local present=false
+
+    TEST_STARTUP_PHASE="config_read_${key}"
+    bashio::log.info "TEST_STARTUP config_read_start label=${key}"
+    if ! value="$(bashio::config "$key")"; then
+        bashio::log.error "TEST_STARTUP config_read_failed label=${key}"
+        return 1
+    fi
+    if [ -n "$value" ] && [ "$value" != "null" ]; then
+        present=true
+    fi
+    printf -v "$destination" '%s' "$value"
+    bashio::log.info "TEST_STARTUP config_read_ok label=${key} present=${present}"
+}
+
+read_config_option USERNAME username
+read_config_option PASSWORD password
+read_config_option COUNTRY country
+read_config_option EVENT_DURATION_SECONDS event_duration
+read_config_option POLLING_INTERVAL_MINUTES polling_interval
+read_config_option ACCEPT_INVITATIONS accept_invitations
+read_config_option TRUSTED_DEVICE_NAME trusted_device_name
+read_config_option STATIONS_CONFIG stations
+read_config_option PORT_VALUE port
+read_config_option DEBUG_VALUE debug
+read_config_option IPV4FIRST_VALUE ipv4first
+TEST_STARTUP_PHASE=config_reads_complete
+bashio::log.info "TEST_STARTUP config_reads_complete status=ok"
 
 COUNTRY_JQ=""
-if bashio::config.has_value 'country'; then
+if [ -n "$COUNTRY" ] && [ "$COUNTRY" != "null" ]; then
     COUNTRY_JQ="country: \$country,"
 fi
 
 EVENT_DURATION_SECONDS_JQ=""
-if bashio::config.has_value 'event_duration'; then
+if [ -n "$EVENT_DURATION_SECONDS" ] && [ "$EVENT_DURATION_SECONDS" != "null" ]; then
     EVENT_DURATION_SECONDS_JQ="eventDurationSeconds: \$event_duration_seconds|tonumber,"
 fi
 
 POLLING_INTERVAL_MINUTES_JQ=""
-if bashio::config.has_value 'polling_interval'; then
+if [ -n "$POLLING_INTERVAL_MINUTES" ] && [ "$POLLING_INTERVAL_MINUTES" != "null" ]; then
     POLLING_INTERVAL_MINUTES_JQ="pollingIntervalMinutes: \$polling_interval_minutes|tonumber,"
 fi
 
 ACCEPT_INVITATIONS_JQ=""
-if bashio::config.true 'accept_invitations'; then
+if [ "$ACCEPT_INVITATIONS" = "true" ]; then
     ACCEPT_INVITATIONS_JQ="acceptInvitations: \$accept_invitations,"
 fi
 
 TRUSTED_DEVICE_NAME_JQ=""
-if bashio::config.has_value 'trusted_device_name'; then
+if [ -n "$TRUSTED_DEVICE_NAME" ] && [ "$TRUSTED_DEVICE_NAME" != "null" ]; then
     TRUSTED_DEVICE_NAME_JQ="trustedDeviceName: \$trusted_device_name,"
 fi
 
 STATION_IP_ADDRESSES_ARG=""
 STATION_IP_ADDRESSES_JQ=""
-if bashio::config.has_value 'stations'; then
+if [ -n "$STATIONS_CONFIG" ] && [ "$STATIONS_CONFIG" != "null" ]; then
     while read -r data
     do
         TMP_DATA=($(echo "${data}" | tr -d "{}\"[:blank:]" | tr "," " " | sed 's/serial_number://g;s/ip_address://g'))
@@ -104,7 +170,7 @@ if bashio::config.has_value 'stations'; then
             STATION_IP_ADDRESSES_ARG="$STATION_IP_ADDRESSES_ARG --arg ${TMP_DATA[0]} ${TMP_DATA[1]}"
             STATION_IP_ADDRESSES_JQ="$STATION_IP_ADDRESSES_JQ, \$${TMP_DATA[0]}"
         fi
-    done <<<"$(bashio::config 'stations')"
+    done <<<"$STATIONS_CONFIG"
     if [ "$STATION_IP_ADDRESSES_ARG" != "" ]; then
         STATION_IP_ADDRESSES_JQ="$STATION_IP_ADDRESSES_JQ }"
     fi
@@ -113,23 +179,23 @@ if bashio::config.has_value 'stations'; then
 fi
 
 PORT_OPTION=""
-if bashio::config.has_value 'port'; then
-    PORT_OPTION="--port $(bashio::config 'port')"
+if [ -n "$PORT_VALUE" ] && [ "$PORT_VALUE" != "null" ]; then
+    PORT_OPTION="--port $PORT_VALUE"
 fi
 
 DEBUG_OPTION=""
-if bashio::config.true 'debug'; then
+if [ "$DEBUG_VALUE" = "true" ]; then
     DEBUG_OPTION="-v"
 fi
 
 IPV4_FIRST_NODE_OPTION=""
-if bashio::config.true 'ipv4first'; then
+if [ "$IPV4FIRST_VALUE" = "true" ]; then
     IPV4_FIRST_NODE_OPTION="--dns-result-order=ipv4first"
 fi
 
 # T9000 WebRTC: bind ICE host candidates to the LAN interface that reaches the hub.
 FIRST_STATION_IP=""
-if bashio::config.has_value 'stations'; then
+if [ -n "$STATIONS_CONFIG" ] && [ "$STATIONS_CONFIG" != "null" ]; then
     while read -r data; do
         if [ -n "$data" ]; then
             TMP_RTC=($(echo "${data}" | tr -d "{}\"[:blank:]" | tr "," " " | sed 's/serial_number://g;s/ip_address://g'))
@@ -138,7 +204,7 @@ if bashio::config.has_value 'stations'; then
                 break
             fi
         fi
-    done <<<"$(bashio::config 'stations')"
+    done <<<"$STATIONS_CONFIG"
 fi
 if [ -n "$FIRST_STATION_IP" ]; then
     RTC_BIND_ADDRESS="$(ip -4 route get "$FIRST_STATION_IP" 2>/dev/null | awk '/src/ { for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
@@ -229,7 +295,9 @@ export RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS="${RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS:-4
 export RTC_FLOODLIGHT_POLL_INTERVAL_MIN="${RTC_FLOODLIGHT_POLL_INTERVAL_MIN:-2}"
 bashio::log.info "RTC_ICE_POLICY=${RTC_ICE_POLICY} RTC_DELAY_SDP_UNTIL_GATHERING=${RTC_DELAY_SDP_UNTIL_GATHERING} RTC_POLL_MAX_MISSES=${RTC_POLL_MAX_MISSES} RTC_POLL_WATCHDOG_MS=${RTC_POLL_WATCHDOG_MS} RTC_PROPERTY_REFRESH_MS=${RTC_PROPERTY_REFRESH_MS} RTC_PROACTIVE_RECONNECT_MS=${RTC_PROACTIVE_RECONNECT_MS} RTC_HANDOFF=${RTC_HANDOFF} RTC_SCTP_MAX_PACKET_BYTES=${RTC_SCTP_MAX_PACKET_BYTES} RTC_SWIPE_WAKE=${RTC_SWIPE_WAKE} RTC_SWIPE_WAKE_AFTER_FAILURES=${RTC_SWIPE_WAKE_AFTER_FAILURES} RTC_SWIPE_WAKE_CAMERA_FALLBACK=${RTC_SWIPE_WAKE_CAMERA_FALLBACK} RTC_TURN_BURST_MS=${RTC_TURN_BURST_MS} RTC_FLOODLIGHT_POLL_INTERVAL_MIN=${RTC_FLOODLIGHT_POLL_INTERVAL_MIN}"
 
-JSON_STRING="$( jq -n \
+TEST_STARTUP_PHASE=json_build
+bashio::log.info "TEST_STARTUP json_build_start"
+if ! JSON_STRING="$( jq -n \
   --arg username "$USERNAME" \
   --arg password "$PASSWORD" \
   --arg country "$COUNTRY" \
@@ -249,7 +317,11 @@ JSON_STRING="$( jq -n \
       $ACCEPT_INVITATIONS_JQ
       $STATION_IP_ADDRESSES_JQ
     }"
-  )"
+  )"; then
+    bashio::log.error "TEST_STARTUP json_build_failed"
+    exit 1
+fi
+bashio::log.info "TEST_STARTUP json_build_complete status=ok"
 
 check_version() {
     if [ "$1" = "$2" ]; then
@@ -262,10 +334,23 @@ check_version() {
     return 0 # lower
 }
 
-if bashio::config.has_value 'username' && bashio::config.has_value 'password'; then
-    echo "$JSON_STRING" > $CONFIG_PATH
+TEST_STARTUP_PHASE=required_options_check
+if [ -n "$USERNAME" ] && [ "$USERNAME" != "null" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "null" ]; then
+    TEST_STARTUP_PHASE=config_file_write
+    if ! printf '%s\n' "$JSON_STRING" > "$CONFIG_PATH"; then
+        bashio::log.error "TEST_STARTUP config_file_write_failed"
+        exit 1
+    fi
+    if ! jq -e 'type == "object" and (.username | type == "string" and length > 0) and (.password | type == "string" and length > 0)' "$CONFIG_PATH" >/dev/null; then
+        bashio::log.error "TEST_STARTUP config_file_validation_failed"
+        exit 1
+    fi
+    bashio::log.info "TEST_STARTUP config_file_ready status=ok"
+    TEST_STARTUP_PHASE=node_exec
+    bashio::log.info "TEST_STARTUP node_exec path=/usr/src/app/node_modules/eufy-security-ws/dist/bin/server.js"
     exec /usr/bin/node $IPV4_FIRST_NODE_OPTION /usr/src/app/node_modules/eufy-security-ws/dist/bin/server.js --host 0.0.0.0 --config $CONFIG_PATH $DEBUG_OPTION $PORT_OPTION
 else
-    echo "Required parameters username and/or password not set. Starting aborted!"
+    bashio::log.error "TEST_STARTUP required_options_missing username_present=${OPTIONS_USERNAME_PRESENT} password_present=${OPTIONS_PASSWORD_PRESENT}"
+    exit 1
 fi
 

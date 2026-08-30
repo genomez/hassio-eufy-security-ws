@@ -7,4 +7,4 @@ codenotary:
 args:
   EUFY_SECURITY_WS_VERSION: 3.0.1
   EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#passport-key-exchange-lifecycle-v6"
-  EUFY_CLIENT_BUILD_ID: "passport-test6-key-lifecycle-20260829a"
+  EUFY_CLIENT_BUILD_ID: "passport-test6b-startup-phases-20260830a"
