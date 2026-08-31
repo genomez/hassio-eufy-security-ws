@@ -31,9 +31,14 @@ the working RTC session is retained for the normal retry/fallback path.
 
 ## Regional RTC candidate
 
-Version `3.0.18-regional-rtc-rc1` is an opt-in validation candidate based on
-`wake-v5`. It adds compatibility for both flat and nested passport-profile
+Version `3.0.18-regional-rtc-rc2` is an opt-in validation candidate based on
+`wake-v6`. It adds compatibility for both flat and nested passport-profile
 responses and, for country `FR`, uses Eufy's EU RTC host, portal-compatible sign
 headers, and `EU` in the WebSocket authentication payload. Other countries keep
 their existing signaling defaults. Empty or NUL-padded-empty inbound database
 payloads are ignored without producing a misleading JSON parse warning.
+
+Version `3.0.18-wake-v6` gives each RTC session its own SCTP/WASM module and
+releases that module when the session closes. This prevents fixed-heap SCTP
+state from accumulating across repeated proactive handoffs, while preserving
+the established answerer mode, 800-byte SCTP packet size, and handoff timing.

@@ -53,22 +53,16 @@ function libsctpDir(): string {
   return join(__dirname, "libsctp");
 }
 
-let libsctpModulePromise: Promise<LibSctpModule> | undefined;
+type LibSctpModuleFactory = () => Promise<LibSctpModule>;
 
-async function loadLibSctpModule(): Promise<LibSctpModule> {
-  if (!libsctpModulePromise) {
-    libsctpModulePromise = (async () => {
-      const dir = libsctpDir();
-      const wasmBinary = readFileSync(join(dir, "libsctp_0_0_2.wasm"));
-      const factory = nodeRequire(join(dir, "libsctp_0_0_2.js")) as LibSctpFactory;
-      const mod = await factory({
-        locateFile: (path: string) => join(dir, path),
-        wasmBinary,
-      });
-      return mod;
-    })();
-  }
-  return libsctpModulePromise;
+async function createLibSctpModule(): Promise<LibSctpModule> {
+  const dir = libsctpDir();
+  const wasmBinary = readFileSync(join(dir, "libsctp_0_0_2.wasm"));
+  const factory = nodeRequire(join(dir, "libsctp_0_0_2.js")) as LibSctpFactory;
+  return factory({
+    locateFile: (path: string) => join(dir, path),
+    wasmBinary,
+  });
 }
 
 function copyToHeap(mod: LibSctpModule, ptr: number, data: Buffer): void {
@@ -98,80 +92,108 @@ export class RtcSctpFramer {
   private onWireSend?: (packet: Buffer) => void;
   private onFrameRecv?: (frame: Buffer, linkType: number) => void;
   private ready = false;
+  private destroyed = false;
+
+  public constructor(private readonly moduleFactory: LibSctpModuleFactory = createLibSctpModule) {}
 
   public async init(
     onWireSend: (packet: Buffer) => void,
     onFrameRecv: (frame: Buffer, linkType: number) => void
   ): Promise<void> {
+    if (this.destroyed) {
+      throw new Error("RtcSctpFramer destroyed during initialization");
+    }
+    if (this.mod || this.ready) {
+      throw new Error("RtcSctpFramer already initialized");
+    }
     this.onWireSend = onWireSend;
     this.onFrameRecv = onFrameRecv;
-    this.mod = await loadLibSctpModule();
-    this.mod._set_mxlog_level(5);
 
-    const sendPacketCb = this.mod.addFunction((id: number, data: number, size: number) => {
-      const packet = copyFromHeap(this.mod!, data, size);
-      rootHTTPLogger.info("RtcSctpFramer wire send", {
-        id,
-        bytes: packet.length,
-        prefix: packet.subarray(0, Math.min(16, packet.length)).toString("hex"),
-      });
-      this.onWireSend?.(packet);
-      return 0;
-    }, "iiii");
-
-    const recvFrameCb = this.mod.addFunction((datachannelId: number, sctpChannel: number, data: number, size: number) => {
-      const frame = copyFromHeap(this.mod!, data, size);
-      const linkType = sctpChannelToLinkType(sctpChannel);
-      rootHTTPLogger.info("RtcSctpFramer frame recv", {
-        datachannelId,
-        sctpChannel,
-        linkType,
-        bytes: frame.length,
-        prefix: frame.subarray(0, Math.min(16, frame.length)).toString("hex"),
-      });
-      this.onFrameRecv?.(frame, linkType);
-      return 0;
-    }, "iiiii");
-
-    const recvFrameMaxDelayMs = 15000;
-    const maxPacketCount = 5000;
-    // Hub soft-TTL ~360s: PTCS padded to maxPacketBytes. 1000 → ~1085B UDP cliffs harder;
-    // 800 → ~885B (run.sh default). Bare sometimes soft-recovers; HA often does not — pair with
-    // RTC_PROACTIVE_RECONNECT_MS + RTC_HANDOFF rather than relying on same-session hold.
-    const maxPacketBytesEnv = Number(process.env.RTC_SCTP_MAX_PACKET_BYTES ?? 800);
-    const maxPacketBytes =
-      Number.isFinite(maxPacketBytesEnv) && maxPacketBytesEnv > 0 ? Math.floor(maxPacketBytesEnv) : 800;
-    const maxFecGroupCount = 10;
-
-    this.sendManager = this.mod._sctp_frame_manager_create(
-      1,
-      SEND_DATACHANNEL_ID,
-      recvFrameMaxDelayMs,
-      1000,
-      maxPacketBytes,
-      maxFecGroupCount
-    );
-    this.recvManager = this.mod._sctp_frame_manager_create(
-      0,
-      RECV_DATACHANNEL_ID,
-      recvFrameMaxDelayMs,
-      maxPacketCount,
-      maxPacketBytes,
-      maxFecGroupCount
-    );
-
-    this.mod._sctp_frame_manager_set_send_packet_callback(this.sendManager, sendPacketCb);
-    this.mod._sctp_frame_manager_set_recv_frame_callback(this.recvManager, recvFrameCb);
-
-    this.recvTimer = setInterval(() => {
-      if (!this.mod || !this.recvManager) {
-        return;
+    try {
+      const mod = await this.moduleFactory();
+      if (this.destroyed) {
+        throw new Error("RtcSctpFramer destroyed during initialization");
       }
-      this.mod._sctp_frame_manager_on_100ms_timer(this.recvManager, Date.now());
-    }, 100);
+      this.mod = mod;
+      mod._set_mxlog_level(5);
 
-    this.ready = true;
-    rootHTTPLogger.info("RtcSctpFramer initialized", { maxPacketBytes, maxFecGroupCount });
+      const sendPacketCb = mod.addFunction((id: number, data: number, size: number) => {
+        const packet = copyFromHeap(mod, data, size);
+        rootHTTPLogger.info("RtcSctpFramer wire send", {
+          id,
+          bytes: packet.length,
+          prefix: packet.subarray(0, Math.min(16, packet.length)).toString("hex"),
+        });
+        this.onWireSend?.(packet);
+        return 0;
+      }, "iiii");
+
+      const recvFrameCb = mod.addFunction((datachannelId: number, sctpChannel: number, data: number, size: number) => {
+        const frame = copyFromHeap(mod, data, size);
+        const linkType = sctpChannelToLinkType(sctpChannel);
+        rootHTTPLogger.info("RtcSctpFramer frame recv", {
+          datachannelId,
+          sctpChannel,
+          linkType,
+          bytes: frame.length,
+          prefix: frame.subarray(0, Math.min(16, frame.length)).toString("hex"),
+        });
+        this.onFrameRecv?.(frame, linkType);
+        return 0;
+      }, "iiiii");
+
+      const recvFrameMaxDelayMs = 15000;
+      const maxPacketCount = 5000;
+      // Hub soft-TTL ~360s: PTCS padded to maxPacketBytes. 1000 → ~1085B UDP cliffs harder;
+      // 800 → ~885B (run.sh default). Bare sometimes soft-recovers; HA often does not — pair with
+      // RTC_PROACTIVE_RECONNECT_MS + RTC_HANDOFF rather than relying on same-session hold.
+      const maxPacketBytesEnv = Number(process.env.RTC_SCTP_MAX_PACKET_BYTES ?? 800);
+      const maxPacketBytes =
+        Number.isFinite(maxPacketBytesEnv) && maxPacketBytesEnv > 0 ? Math.floor(maxPacketBytesEnv) : 800;
+      const maxFecGroupCount = 10;
+
+      this.sendManager = mod._sctp_frame_manager_create(
+        1,
+        SEND_DATACHANNEL_ID,
+        recvFrameMaxDelayMs,
+        1000,
+        maxPacketBytes,
+        maxFecGroupCount
+      );
+      if (!this.sendManager) {
+        throw new Error("RtcSctpFramer send manager creation failed");
+      }
+      this.recvManager = mod._sctp_frame_manager_create(
+        0,
+        RECV_DATACHANNEL_ID,
+        recvFrameMaxDelayMs,
+        maxPacketCount,
+        maxPacketBytes,
+        maxFecGroupCount
+      );
+      if (!this.recvManager) {
+        throw new Error("RtcSctpFramer receive manager creation failed");
+      }
+
+      mod._sctp_frame_manager_set_send_packet_callback(this.sendManager, sendPacketCb);
+      mod._sctp_frame_manager_set_recv_frame_callback(this.recvManager, recvFrameCb);
+
+      this.recvTimer = setInterval(() => {
+        if (!this.mod || !this.recvManager) {
+          return;
+        }
+        this.mod._sctp_frame_manager_on_100ms_timer(this.recvManager, Date.now());
+      }, 100);
+
+      this.ready = true;
+      rootHTTPLogger.info("RtcSctpFramer initialized", {
+        maxPacketBytes,
+        maxFecGroupCount,
+      });
+    } catch (err) {
+      this.destroy();
+      throw err;
+    }
   }
 
   public isReady(): boolean {
@@ -194,11 +216,7 @@ export class RtcSctpFramer {
     }
     copyToHeap(this.mod, frameData, portalPacket);
     this.mod._sctp_frame_buffer_set_size(frameBuffer, frameSize);
-    const ret = this.mod._sctp_frame_manager_push_frame_data(
-      this.sendManager,
-      frameBuffer,
-      WEBRTC_P2P_COMMAND_CHANNEL
-    );
+    const ret = this.mod._sctp_frame_manager_push_frame_data(this.sendManager, frameBuffer, WEBRTC_P2P_COMMAND_CHANNEL);
     if (ret !== 0) {
       throw new Error(`RtcSctpFramer push_frame_data failed: ${ret}`);
     }
@@ -227,7 +245,9 @@ export class RtcSctpFramer {
     const packetSize = wirePacket.length;
     const packetBuffer = this.mod._sctp_frame_manager_get_packet_buffer(this.recvManager, packetSize);
     if (!packetBuffer) {
-      rootHTTPLogger.warn("RtcSctpFramer get_packet_buffer failed", { packetSize });
+      rootHTTPLogger.warn("RtcSctpFramer get_packet_buffer failed", {
+        packetSize,
+      });
       return;
     }
     const packetData = this.mod._sctp_packet_get_data(packetBuffer);
@@ -239,6 +259,10 @@ export class RtcSctpFramer {
   }
 
   public destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
     this.ready = false;
     if (this.recvTimer) {
       clearInterval(this.recvTimer);

@@ -1,6 +1,6 @@
 name: eufy-security-ws regional RTC candidate
 description: Opt-in stable candidate for passport-profile and FR/EU RTC compatibility
-version: 3.0.18-regional-rtc-rc1
+version: 3.0.18-regional-rtc-rc2
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

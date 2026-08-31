@@ -237,7 +237,10 @@ export class RtcPeerConnection extends EventEmitter {
   private snapshotTimer?: NodeJS.Timeout;
   private gatheringCompleteEmitted = false;
   private pacingActive = false;
-  private peerOptions: RtcPeerOptions = { iceTransportPolicy: "all", dtlsSetup: "passive" };
+  private peerOptions: RtcPeerOptions = {
+    iceTransportPolicy: "all",
+    dtlsSetup: "passive",
+  };
   private localRelayCandidateSeen = false;
   private relayCandidateWaiters: Array<() => void> = [];
   private sctpFramer?: RtcSctpFramer;
@@ -278,22 +281,12 @@ export class RtcPeerConnection extends EventEmitter {
     // (host-only) unless explicitly re-enabled, so ICE gathering finishes instantly.
     // allowTurn overrides RTC_NO_TURN for short camera-channel live-wake sessions.
     const noTurn =
-      !this.peerOptions.allowTurn &&
-      (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
+      !this.peerOptions.allowTurn && (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
     const iceServers: IceServer[] = [];
     if (!noTurn) {
-      iceServers.push(
-        ...turnIceServers(turn.turn_addr, turn.turn_port, turn.turn_user, turn.turn_password)
-      );
+      iceServers.push(...turnIceServers(turn.turn_addr, turn.turn_port, turn.turn_user, turn.turn_password));
       if (turn.alt_turn_addr && turn.alt_turn_port) {
-        iceServers.push(
-          ...turnIceServers(
-            turn.alt_turn_addr,
-            turn.alt_turn_port,
-            turn.turn_user,
-            turn.turn_password
-          )
-        );
+        iceServers.push(...turnIceServers(turn.alt_turn_addr, turn.alt_turn_port, turn.turn_user, turn.turn_password));
       }
     }
 
@@ -313,7 +306,10 @@ export class RtcPeerConnection extends EventEmitter {
 
     this.pc.onLocalDescription((sdp, type) => {
       const t = String(type).toLowerCase();
-      rootHTTPLogger.info("RtcPeer onLocalDescription", { type: t, len: sdp.length });
+      rootHTTPLogger.info("RtcPeer onLocalDescription", {
+        type: t,
+        len: sdp.length,
+      });
       if (t === "answer" && this.localAnswerWaiter) {
         clearTimeout(this.localAnswerWaiter.timer);
         this.localAnswerWaiter.resolve(sdp);
@@ -374,7 +370,10 @@ export class RtcPeerConnection extends EventEmitter {
 
     this.pc.onIceStateChange((state) => {
       const mapped = mapIceState(state);
-      rootHTTPLogger.info("RtcPeer iceConnectionState", { state: mapped, raw: state });
+      rootHTTPLogger.info("RtcPeer iceConnectionState", {
+        state: mapped,
+        raw: state,
+      });
       this.logSnapshot("iceConnectionState");
       this.emit("iceConnectionState", mapped);
       if (mapped === "connected" && !this.commandChannelOpen) {
@@ -430,8 +429,7 @@ export class RtcPeerConnection extends EventEmitter {
     }
     let answerSdp = sdpAnswer;
     const noTurn =
-      !this.peerOptions.allowTurn &&
-      (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
+      !this.peerOptions.allowTurn && (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
     if ((this.peerOptions.iceTransportPolicy ?? "relay") === "relay") {
       answerSdp = filterSdpRelayCandidates(sdpAnswer);
     } else if (noTurn) {
@@ -444,7 +442,10 @@ export class RtcPeerConnection extends EventEmitter {
     if (/a=setup:actpass/.test(answerSdp)) {
       const answerRole = process.env.RTC_ANSWER_SETUP?.toLowerCase() === "active" ? "active" : "passive";
       answerSdp = answerSdp.replace(/a=setup:actpass/g, `a=setup:${answerRole}`);
-      rootHTTPLogger.info("RtcPeer coerced answer DTLS role", { from: "actpass", to: answerRole });
+      rootHTTPLogger.info("RtcPeer coerced answer DTLS role", {
+        from: "actpass",
+        to: answerRole,
+      });
     }
     rootHTTPLogger.info("RtcPeer remote SDP answer", sdpHighlights(answerSdp));
     this.pc.setRemoteDescription(answerSdp, "answer");
@@ -675,19 +676,29 @@ export class RtcPeerConnection extends EventEmitter {
     if (this.dataChannels.has(name)) {
       return;
     }
-    rootHTTPLogger.info("RtcPeer wireDataChannel", { label: name, open: dc.isOpen() });
+    rootHTTPLogger.info("RtcPeer wireDataChannel", {
+      label: name,
+      open: dc.isOpen(),
+    });
 
     dc.onOpen(() => {
       rootHTTPLogger.info("RtcPeer dataChannel open", { label: name });
       if (name === "WebrtcDataChannel") {
         void this.initSctpFramer(dc)
           .then(() => {
+            if (!this.pc || !dc.isOpen() || !this.sctpFramer?.isReady()) {
+              return;
+            }
             this.commandChannelOpen = true;
             this.stopSnapshotWatchdog();
             this.logSnapshot("commandChannelOpen");
             this.emit("commandChannelOpen");
           })
           .catch((err) => {
+            if (!this.pc || !dc.isOpen()) {
+              rootHTTPLogger.info("RtcPeer SCTP setup cancelled after peer close");
+              return;
+            }
             rootHTTPLogger.error("RtcPeer command channel SCTP setup failed", {
               error: err instanceof Error ? err.message : String(err),
             });
@@ -702,16 +713,15 @@ export class RtcPeerConnection extends EventEmitter {
       }
     });
     dc.onError((err) => {
-      rootHTTPLogger.warn("RtcPeer dataChannel error", { label: name, error: err });
+      rootHTTPLogger.warn("RtcPeer dataChannel error", {
+        label: name,
+        error: err,
+      });
       this.emit("error", new Error(`RtcPeer dataChannel error: ${name}: ${err}`));
     });
     dc.onMessage((msg) => {
       const buf =
-        typeof msg === "string"
-          ? Buffer.from(msg)
-          : Buffer.isBuffer(msg)
-            ? msg
-            : Buffer.from(msg as ArrayBuffer);
+        typeof msg === "string" ? Buffer.from(msg) : Buffer.isBuffer(msg) ? msg : Buffer.from(msg as ArrayBuffer);
       if (name === "WebrtcDataChannel" && this.sctpFramer?.isReady()) {
         this.sctpFramer.recvPacket(buf);
         return;
@@ -762,8 +772,11 @@ export class RtcPeerConnection extends EventEmitter {
         }
       )
       .catch((err) => {
-        this.sctpFramer = undefined;
-        this.sctpFramerInit = undefined;
+        if (this.sctpFramer === framer) {
+          framer.destroy();
+          this.sctpFramer = undefined;
+          this.sctpFramerInit = undefined;
+        }
         throw err;
       });
     return this.sctpFramerInit;
@@ -887,8 +900,7 @@ export class RtcPeerConnection extends EventEmitter {
     // and the handshake stalls ~31s then drops. Restricting to host candidates removes that race so
     // ICE deterministically settles on the working direct LAN pair.
     const noTurn =
-      !this.peerOptions.allowTurn &&
-      (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
+      !this.peerOptions.allowTurn && (process.env.RTC_NO_TURN === "1" || process.env.RTC_NO_TURN === "true");
     if (noTurn && iceCandidateType(candidate) !== "host") {
       return false;
     }
