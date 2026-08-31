@@ -28,3 +28,8 @@ Version `3.0.18-wake-v5` makes RTC handoff connection and timeout completion a
 single observed promise. A failed or slow replacement connection can no longer
 leave an orphaned `T9000 RTC handoff timeout` rejection that terminates Node;
 the working RTC session is retained for the normal retry/fallback path.
+
+Version `3.0.18-wake-v6` gives each RTC session its own SCTP/WASM module and
+releases that module when the session closes. This prevents fixed-heap SCTP
+state from accumulating across repeated proactive handoffs, while preserving
+the established answerer mode, 800-byte SCTP packet size, and handoff timing.
