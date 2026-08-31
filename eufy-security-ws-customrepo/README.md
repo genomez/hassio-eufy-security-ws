@@ -42,3 +42,18 @@ Version `3.0.18-wake-v6` gives each RTC session its own SCTP/WASM module and
 releases that module when the session closes. This prevents fixed-heap SCTP
 state from accumulating across repeated proactive handoffs, while preserving
 the established answerer mode, 800-byte SCTP packet size, and handoff timing.
+
+## Regional handoff diagnostic
+
+Version `3.0.18-regional-handoff-test1` is an isolated reporter test based on
+`3.0.18-regional-rtc-rc2`. It adds process-local handoff IDs and sanitized
+replacement-session phase markers from sign retrieval through WebSocket auth,
+peer/SDP setup, and command-channel opening. An outer 45-second watchdog is
+armed before the replacement connection starts; if the inner lifecycle does
+not settle, only the replacement session is closed and the working original
+session is retained. A `finally` marker records terminal cleanup for every
+handoff attempt.
+
+The diagnostic does not change regional endpoint selection, authentication
+data, SCTP packet size, answerer/client-offer mode, proactive handoff timing,
+property refresh, or Mega retry/throttle behavior.

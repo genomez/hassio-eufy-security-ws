@@ -17,6 +17,8 @@ export interface RtcSessionOptions extends RtcSignalingOptions {
    * Used for Coturn UDP wake so we don't hold a failed relay-only session on the hub.
    */
   turnHarvestOnly?: boolean;
+  /** Process-local correlation ID for replacement-session handoff diagnostics. */
+  handoffId?: number;
 }
 
 export interface RtcSessionEvents {
@@ -56,8 +58,7 @@ export class RtcSession extends EventEmitter {
   // to send the SDP offer. When enabled we offer first and treat the hub reply as an answer.
   // Default is answerer (hub offers). Client-offer mode can ICE-connect then stall
   // with hub ignoring DTLS ClientHello on current T9000 firmware — see RTC_CLIENT_OFFER.
-  private readonly isOfferer =
-    process.env.RTC_CLIENT_OFFER === "1" || process.env.RTC_CLIENT_OFFER === "true";
+  private readonly isOfferer = process.env.RTC_CLIENT_OFFER === "1" || process.env.RTC_CLIENT_OFFER === "true";
   /** True once we have sent (or are sending) a client offer — hub SDP is then treated as answer. */
   private actingAsOfferer = false;
   private clientOfferSent = false;
@@ -73,6 +74,7 @@ export class RtcSession extends EventEmitter {
       ...opts,
       adminUserId: opts.adminUserId,
     });
+    this.reportHandoffPhase("session_initialized");
 
     this.signaling.on("message", (inner) => {
       this.messageChain = this.messageChain
@@ -86,10 +88,14 @@ export class RtcSession extends EventEmitter {
     this.signaling.on("close", (code, reason) => {
       const uptimeMs = this.connectedAt ? Date.now() - this.connectedAt : undefined;
       rootHTTPLogger.info("RtcSession signaling closed", { code, reason: reason || undefined, uptimeMs });
+      this.reportHandoffPhase("signaling_closed", { code, uptimeMs });
       this.stopSignalingKeepalive();
       this.emit("close");
     });
-    this.signaling.on("error", (err) => this.emit("error", err));
+    this.signaling.on("error", (err) => {
+      this.reportHandoffPhase("signaling_error");
+      this.emit("error", err);
+    });
 
     this.peer.on("iceCandidate", (candidate) => {
       // Portal: SDP answer on channelId 0, trickle ICE on channelId 1.
@@ -97,9 +103,11 @@ export class RtcSession extends EventEmitter {
     });
     this.peer.on("iceGatheringComplete", () => {
       rootHTTPLogger.info("RtcSession ICE gathering complete — sending end-of-candidates");
+      this.reportHandoffPhase("ice_gathering_complete");
       this.signaling.sendInfoEndOfCandidates(1);
     });
     this.peer.on("commandChannelOpen", () => {
+      this.reportHandoffPhase("command_channel_open");
       if (!this.connected) {
         this.connected = true;
         this.connectedAt = Date.now();
@@ -108,8 +116,12 @@ export class RtcSession extends EventEmitter {
         this.emit("connected");
       }
     });
-    this.peer.on("error", (err) => this.emit("error", err));
+    this.peer.on("error", (err) => {
+      this.reportHandoffPhase("peer_error");
+      this.emit("error", err);
+    });
     this.peer.on("connectionState", (state) => {
+      this.reportHandoffPhase("peer_connection_state", { state });
       // Propagate a dropped peer connection immediately so Station reconnects fast, instead of
       // waiting ~80s for the live-poll watchdog to notice (SCTP/ICE can drop after ~1 min).
       if ((state === "failed" || state === "closed") && !this.closed && this.connected) {
@@ -127,10 +139,17 @@ export class RtcSession extends EventEmitter {
   }
 
   public async connect(): Promise<void> {
+    this.reportHandoffPhase("fetch_sign_start");
     await this.signaling.fetchSign();
+    this.reportHandoffPhase("fetch_sign_complete");
+    this.reportHandoffPhase("websocket_connect_start");
     await this.signaling.connect();
+    this.reportHandoffPhase("websocket_connect_complete");
+    this.reportHandoffPhase("auth_wait_start");
     await this.waitForAuth();
+    this.reportHandoffPhase("auth_complete");
     rootHTTPLogger.info("RtcSession auth ok — sending scall", { channelId: this.channelId });
+    this.reportHandoffPhase("scall_send");
     this.signaling.sendCall(this.channelId);
   }
 
@@ -143,6 +162,7 @@ export class RtcSession extends EventEmitter {
   }
 
   public close(): void {
+    this.reportHandoffPhase("session_close_called");
     this.closed = true;
     this.connected = false;
     this.clearHubOfferFallback();
@@ -161,7 +181,10 @@ export class RtcSession extends EventEmitter {
       return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("RtcSession auth timeout")), timeoutMs);
+      const timer = setTimeout(() => {
+        this.reportHandoffPhase("auth_timeout");
+        reject(new Error("RtcSession auth timeout"));
+      }, timeoutMs);
       const onMsg = (inner: { action?: number; code?: number }) => {
         if (inner.action === 1 && inner.code === 200) {
           this.authOk = true;
@@ -217,7 +240,10 @@ export class RtcSession extends EventEmitter {
 
     if (dataType === "hangup") {
       const uptimeMs = this.connectedAt ? Date.now() - this.connectedAt : undefined;
-      rootHTTPLogger.warn("RtcSession hub hangup", { uptimeMs, channelId: (inner as { channelId?: number }).channelId });
+      rootHTTPLogger.warn("RtcSession hub hangup", {
+        uptimeMs,
+        channelId: (inner as { channelId?: number }).channelId,
+      });
       return;
     }
 
@@ -234,6 +260,7 @@ export class RtcSession extends EventEmitter {
     }
     const status = payload.status;
     rootHTTPLogger.info("RtcSession scall response", { status, hasTurn: !!payload.turn });
+    this.reportHandoffPhase("scall_response", { status, hasTurn: !!payload.turn });
 
     if (status === 100 && payload.turn) {
       this.rtc408Retries = 0;
@@ -251,7 +278,9 @@ export class RtcSession extends EventEmitter {
         });
         return;
       }
+      this.reportHandoffPhase("peer_init_start");
       await this.peer.initWithTurn(payload.turn, this.resolvePeerOptions());
+      this.reportHandoffPhase("peer_init_complete");
       if (this.isOfferer && !this.clientOfferSent) {
         await this.sendClientOffer("initial");
       } else if (!this.isOfferer) {
@@ -295,12 +324,10 @@ export class RtcSession extends EventEmitter {
   private resolvePeerOptions(): RtcPeerOptions {
     const envPolicy = process.env.RTC_ICE_POLICY?.toLowerCase();
     const iceTransportPolicy =
-      this.opts.iceTransportPolicy ??
-      (envPolicy === "all" ? "all" : envPolicy === "relay" ? "relay" : "all");
+      this.opts.iceTransportPolicy ?? (envPolicy === "all" ? "all" : envPolicy === "relay" ? "relay" : "all");
     const envSetup = process.env.RTC_DTLS_SETUP?.toLowerCase();
     const dtlsSetup =
-      this.opts.dtlsSetup ??
-      (envSetup === "active" ? "active" : envSetup === "passive" ? "passive" : "passive");
+      this.opts.dtlsSetup ?? (envSetup === "active" ? "active" : envSetup === "passive" ? "passive" : "passive");
     return {
       iceTransportPolicy,
       dtlsSetup,
@@ -401,12 +428,16 @@ export class RtcSession extends EventEmitter {
       if (this.actingAsOfferer || this.isOfferer) {
         // We offered (or fallback-offered); this remote SDP is the hub's answer.
         rootHTTPLogger.info("RtcSession received SDP answer", { len: sdpOffer.length });
+        this.reportHandoffPhase("sdp_answer_received");
         await this.peer.handleRemoteAnswer(sdpOffer);
+        this.reportHandoffPhase("sdp_answer_applied");
         return;
       }
 
       rootHTTPLogger.info("RtcSession received SDP offer", { len: sdpOffer.length });
+      this.reportHandoffPhase("sdp_offer_received");
       const answerSdp = await this.peer.handleRemoteOffer(sdpOffer);
+      this.reportHandoffPhase("sdp_offer_applied");
       let sendSdp = answerSdp;
       if (process.env.RTC_DELAY_SDP_UNTIL_GATHERING === "1") {
         try {
@@ -424,6 +455,22 @@ export class RtcSession extends EventEmitter {
       const scallJson = this.peer.getCommandChannelScallJson(sendSdp);
       this.signaling.sendInfoSdp(scallJson, this.channelId);
       rootHTTPLogger.info("RtcSession sent SDP answer");
+      this.reportHandoffPhase("sdp_answer_sent");
+    }
+  }
+
+  private reportHandoffPhase(phase: string, details: Record<string, unknown> = {}): void {
+    if (this.opts.handoffId === undefined) {
+      return;
+    }
+    try {
+      rootHTTPLogger.info("RtcSession handoff phase", {
+        handoffId: this.opts.handoffId,
+        phase,
+        ...details,
+      });
+    } catch {
+      /* diagnostics must never change RTC behavior */
     }
   }
 

@@ -14,6 +14,7 @@ export interface StationRtcTransportEvents {
 }
 
 type RtcConnectWaitSession = Pick<RtcSession, "connect" | "on" | "off">;
+type RtcHandoffPhaseReporter = (phase: string) => void;
 
 /**
  * Arm the session events and the timeout as one immediately observed promise.
@@ -23,6 +24,7 @@ type RtcConnectWaitSession = Pick<RtcSession, "connect" | "on" | "off">;
 export function connectAndWaitForRtcSession(
   session: RtcConnectWaitSession,
   timeoutMs: number,
+  reportPhase?: RtcHandoffPhaseReporter
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -48,29 +50,135 @@ export function connectAndWaitForRtcSession(
         resolve();
       }
     };
-    const onConnected = (): void => finish();
-    const onError = (error: unknown): void =>
+    const report = (phase: string): void => {
+      try {
+        reportPhase?.(phase);
+      } catch {
+        /* diagnostics must never change the connection lifecycle */
+      }
+    };
+    const onConnected = (): void => {
+      report("session_connected");
+      finish();
+    };
+    const onError = (error: unknown): void => {
+      report("session_error");
       finish(error instanceof Error ? error : new Error(String(error)));
-    const onClose = (): void =>
+    };
+    const onClose = (): void => {
+      report("session_closed_before_connect");
       finish(new Error("T9000 RTC handoff closed before connect"));
+    };
 
     session.on("connected", onConnected);
     session.on("error", onError);
     session.on("close", onClose);
-    timer = setTimeout(
-      () => finish(new Error("T9000 RTC handoff timeout")),
-      timeoutMs,
-    );
+    report("session_listeners_armed");
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        report("session_timeout_fired");
+        finish(new Error("T9000 RTC handoff timeout"));
+      }, timeoutMs);
+      report("session_timeout_armed");
+    }
 
     try {
+      report("session_connect_invoking");
       void session
         .connect()
-        .catch((error: unknown) =>
-          finish(error instanceof Error ? error : new Error(String(error))),
-        );
+        .then(() => report("session_connect_resolved"))
+        .catch((error: unknown) => {
+          report("session_connect_rejected");
+          finish(error instanceof Error ? error : new Error(String(error)));
+        });
+      report("session_connect_invoked");
     } catch (error) {
+      report("session_connect_threw");
       finish(error instanceof Error ? error : new Error(String(error)));
     }
+  });
+}
+
+/**
+ * Arm a terminal watchdog before the replacement connection factory is invoked.
+ * The handoff uses this guard outside all session/signaling promises so a stalled
+ * inner lifecycle cannot leave handoffConnect() pending forever.
+ */
+export function runWithHandoffTerminalTimeout<T>(
+  attemptFactory: () => Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => void,
+  reportPhase?: RtcHandoffPhaseReporter
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+
+    const report = (phase: string): void => {
+      try {
+        reportPhase?.(phase);
+      } catch {
+        /* diagnostics must never change the connection lifecycle */
+      }
+    };
+    const cleanup = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+    const succeed = (value: T): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const fail = (error: unknown): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+
+    timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      report("outer_watchdog_fired");
+      try {
+        onTimeout();
+      } catch {
+        report("outer_watchdog_cleanup_threw");
+      }
+      fail(new Error("T9000 RTC handoff outer timeout"));
+    }, timeoutMs);
+    report("outer_watchdog_armed");
+
+    let attempt: Promise<T>;
+    try {
+      report("outer_attempt_invoking");
+      attempt = attemptFactory();
+      report("outer_attempt_invoked");
+    } catch (error) {
+      report("outer_attempt_threw");
+      fail(error);
+      return;
+    }
+
+    void attempt.then(
+      (value) => {
+        report("outer_attempt_resolved");
+        succeed(value);
+      },
+      (error: unknown) => {
+        report("outer_attempt_rejected");
+        fail(error);
+      }
+    );
   });
 }
 
@@ -83,6 +191,7 @@ export class StationRtcTransport extends EventEmitter {
   private connecting = false;
   private connected = false;
   private handoffInProgress = false;
+  private handoffSequence = 0;
   /** When true, ignore close events from a session we are intentionally retiring. */
   private retiringSession = false;
   private commandDataHandler?: (data: Buffer, linkType?: number) => void;
@@ -95,10 +204,7 @@ export class StationRtcTransport extends EventEmitter {
     // completes in <1s; when it fails, DTLS gives up at ~31s. The old 180s default meant a failed
     // attempt blocked reconnect for 3 minutes. Cap at 45s (past the DTLS timeout) so a missed
     // handshake retries promptly. Tunable via RTC_CONNECT_TIMEOUT_MS.
-    private readonly connectTimeoutMs = Math.max(
-      10000,
-      Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? "45000") || 45000,
-    ),
+    private readonly connectTimeoutMs = Math.max(10000, Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? "45000") || 45000)
   ) {
     super();
   }
@@ -128,9 +234,7 @@ export class StationRtcTransport extends EventEmitter {
     this.session = session;
     this.wirePrimarySession(session);
 
-    rootHTTPLogger.info("StationRtcTransport connecting", {
-      stationSn: this.stationSn,
-    });
+    rootHTTPLogger.info("StationRtcTransport connecting", { stationSn: this.stationSn });
 
     try {
       await session.connect();
@@ -193,37 +297,67 @@ export class StationRtcTransport extends EventEmitter {
       }
     }
     if (this.handoffInProgress || this.connecting) {
-      rootHTTPLogger.debug(
-        "StationRtcTransport handoff skipped — already in progress",
-        {
-          stationSn: this.stationSn,
-        },
-      );
+      rootHTTPLogger.debug("StationRtcTransport handoff skipped — already in progress", {
+        stationSn: this.stationSn,
+      });
       return false;
     }
 
     this.handoffInProgress = true;
     const oldSession = this.session;
     const startedAt = Date.now();
-    const newSession = this.createSession();
+    const handoffId = ++this.handoffSequence;
+    let newSession: RtcSession | undefined;
+    let replacementClosed = false;
+    let terminalOutcome: "complete" | "failed" = "failed";
 
-    rootHTTPLogger.info(
-      "StationRtcTransport handoff starting — second session while first stays up",
-      {
-        stationSn: this.stationSn,
-      },
-    );
-
-    newSession.on("commandData", (data, linkType) => {
-      this.commandDataHandler?.(data, linkType);
+    rootHTTPLogger.info("StationRtcTransport handoff starting — second session while first stays up", {
+      stationSn: this.stationSn,
+      handoffId,
+      timeoutMs: this.connectTimeoutMs,
     });
 
+    const reportPhase = (phase: string): void => {
+      rootHTTPLogger.info("StationRtcTransport handoff phase", {
+        stationSn: this.stationSn,
+        handoffId,
+        phase,
+        elapsedMs: Date.now() - startedAt,
+      });
+    };
+    const closeReplacement = (phase: string): void => {
+      if (!newSession || replacementClosed) {
+        return;
+      }
+      replacementClosed = true;
+      reportPhase(phase);
+      try {
+        newSession.close();
+      } catch {
+        reportPhase(`${phase}_threw`);
+      }
+    };
+
     try {
-      await connectAndWaitForRtcSession(newSession, this.connectTimeoutMs);
+      newSession = this.createSession(handoffId);
+      reportPhase("replacement_created");
+      newSession.on("commandData", (data, linkType) => {
+        this.commandDataHandler?.(data, linkType);
+      });
+      reportPhase("replacement_command_listener_armed");
+
+      await runWithHandoffTerminalTimeout(
+        () => connectAndWaitForRtcSession(newSession as RtcSession, 0, reportPhase),
+        this.connectTimeoutMs,
+        () => closeReplacement("replacement_timeout_close"),
+        reportPhase
+      );
+      reportPhase("replacement_connected");
 
       // Swap before retiring old so sendCommand uses the new channel immediately.
       this.session = newSession;
       this.wirePrimarySession(newSession);
+      reportPhase("replacement_adopted");
 
       this.retiringSession = true;
       try {
@@ -233,31 +367,31 @@ export class StationRtcTransport extends EventEmitter {
         /* ignore */
       }
       this.retiringSession = false;
+      reportPhase("original_retired");
 
       const durationMs = Date.now() - startedAt;
       rootHTTPLogger.info("StationRtcTransport handoff complete", {
         stationSn: this.stationSn,
+        handoffId,
         durationMs,
       });
       this.emit("handoff", { durationMs });
-      this.handoffInProgress = false;
+      terminalOutcome = "complete";
       return true;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      rootHTTPLogger.warn(
-        "StationRtcTransport handoff failed — keeping existing session",
-        {
-          stationSn: this.stationSn,
-          error: error.message,
-          durationMs: Date.now() - startedAt,
-        },
-      );
+      rootHTTPLogger.warn("StationRtcTransport handoff failed — keeping existing session", {
+        stationSn: this.stationSn,
+        handoffId,
+        error: error.message,
+        durationMs: Date.now() - startedAt,
+      });
       try {
-        newSession.removeAllListeners();
-        newSession.close();
+        newSession?.removeAllListeners();
       } catch {
         /* ignore */
       }
+      closeReplacement("replacement_failure_close");
       // Ensure we still point at the old session if swap never happened.
       if (this.session !== oldSession && this.session !== newSession) {
         this.session = oldSession;
@@ -265,9 +399,16 @@ export class StationRtcTransport extends EventEmitter {
         this.session = oldSession;
         this.wirePrimarySession(oldSession);
       }
+      return false;
+    } finally {
       this.handoffInProgress = false;
       this.retiringSession = false;
-      return false;
+      rootHTTPLogger.info("StationRtcTransport handoff finalized", {
+        stationSn: this.stationSn,
+        handoffId,
+        outcome: terminalOutcome,
+        durationMs: Date.now() - startedAt,
+      });
     }
   }
 
@@ -279,9 +420,7 @@ export class StationRtcTransport extends EventEmitter {
     return this.session?.sendCommand(data) ?? false;
   }
 
-  public onCommandData(
-    handler: (data: Buffer, linkType?: number) => void,
-  ): void {
+  public onCommandData(handler: (data: Buffer, linkType?: number) => void): void {
     this.commandDataHandler = handler;
   }
 
@@ -298,16 +437,15 @@ export class StationRtcTransport extends EventEmitter {
     }
   }
 
-  private createSession(): RtcSession {
-    const gtoken = createHash("md5")
-      .update(this.credentials.userId)
-      .digest("hex");
+  private createSession(handoffId?: number): RtcSession {
+    const gtoken = createHash("md5").update(this.credentials.userId).digest("hex");
     return new RtcSession({
       authToken: this.credentials.authToken,
       gtoken,
       stationSn: this.stationSn,
       adminUserId: this.adminUserId,
       region: this.credentials.region,
+      handoffId,
     });
   }
 
