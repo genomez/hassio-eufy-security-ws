@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-handoff-diagnostic-v2`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-auth-recovery-test3`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -62,6 +62,18 @@ monotonic handoff heartbeat with event-loop lag; and a separate station-level
 50-second absolute deadline. Either deadline closes only the replacement and
 retains the working original session for the existing probe/retry path.
 
-The diagnostic does not change regional endpoint selection, authentication
-data, SCTP packet size, answerer/client-offer mode, proactive handoff timing,
-property refresh, or Mega retry/throttle behavior.
+Version `3.0.18-regional-auth-test3` is an isolated reporter-only follow-up for
+the exact sign-endpoint failure `HTTP 401` where the Mega token no longer
+exists because it was kicked out. On an initial disconnected RTC attempt only,
+it verifies that no T9000 RTC session is connected, creates a local persistence
+backup, records a 24-hour cooldown, and removes only the root stale Mega
+session. It then invokes the add-on's normal Mega login flow so any email code
+or captcha is handled through Home Assistant. A successful login installs the
+fresh RTC credentials and resumes the blocked T9000 connection. Recovery is
+single-flight and fail-closed; unrelated 401 responses, ordinary RTC failures,
+and proactive handoffs do not reset authentication. Logs contain status and
+phase markers, not tokens or authentication payloads.
+
+The diagnostic does not change regional endpoint selection, SCTP packet size,
+answerer/client-offer mode, proactive handoff timing, property refresh, or the
+existing Mega login lockout behavior.

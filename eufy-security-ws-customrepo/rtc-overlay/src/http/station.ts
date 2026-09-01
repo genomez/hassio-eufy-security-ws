@@ -180,6 +180,7 @@ import { rootHTTPLogger } from "../logging";
 import { RtcSession } from "../rtc/rtcSession";
 import { RtcTurnConfig } from "../rtc/rtcPeer";
 import { StationRtcTransport } from "../rtc/stationRtcTransport";
+import { isRevokedMegaTokenSignError } from "../rtc/rtcSignaling";
 import { turnAllocateWake } from "../rtc/turnAllocateWake";
 import { connectAndWaitForTurn } from "../rtc/turnHarvestWait";
 import { buildPortalPacket } from "../rtc/rtcPacket";
@@ -208,6 +209,7 @@ export class Station extends TypedEmitter<StationEvents> {
   private rtcConnectedAt?: number;
   private rtcDisconnectedAt?: number;
   private rtcReconnectFailures = 0;
+  private rtcAuthRecoveryBlocked = false;
   private rtcCloudWakeLastAt = 0;
   private rtcCloudWakeInFlight = false;
   private rtcLiveWakeLastAt = 0;
@@ -1186,6 +1188,9 @@ export class Station extends TypedEmitter<StationEvents> {
   }
 
   private async connectRtc(): Promise<void> {
+    if (this.rtcAuthRecoveryBlocked) {
+      return;
+    }
     if (this.rtcTransport?.isConnected() || this.rtcTransport?.isConnecting()) {
       return;
     }
@@ -1223,11 +1228,36 @@ export class Station extends TypedEmitter<StationEvents> {
       rootHTTPLogger.info(`Failed WebRTC connect to station ${this.getSerial()}`, {
         error: getError(error),
       });
+      if (isRevokedMegaTokenSignError(error) && !this.rtcTransport?.isConnected()) {
+        try {
+          const recovery = await this.api.recoverRevokedMegaRtcSession();
+          rootHTTPLogger.warn(`T9000 ${this.getSerial()}: revoked Mega RTC session recovery`, {
+            status: recovery.status,
+            failedStage: recovery.failedStage,
+            cooldownUntil: recovery.cooldownUntil,
+          });
+        } catch {
+          rootHTTPLogger.warn(`T9000 ${this.getSerial()}: revoked Mega RTC session recovery handler failed`);
+        }
+        this.rtcAuthRecoveryBlocked = true;
+        this.onRtcConnectFailed(error, false);
+        return;
+      }
       this.onRtcConnectFailed(error);
     }
   }
 
+  /** Resume only after the normal Mega login/verification flow has installed fresh credentials. */
+  public async resumeRtcAfterMegaAuthRecovery(): Promise<void> {
+    if (!this.isStationHomeBaseProfessionalS1() || this.terminating) {
+      return;
+    }
+    this.rtcAuthRecoveryBlocked = false;
+    await this.connectRtc();
+  }
+
   private onRtcConnect(): void {
+    this.rtcAuthRecoveryBlocked = false;
     this.rtcReconnectFailures = 0;
     this.resetCurrentDelay();
     this.rtcConnectedAt = Date.now();
@@ -1300,7 +1330,7 @@ export class Station extends TypedEmitter<StationEvents> {
     }
   }
 
-  private onRtcConnectFailed(error: Error): void {
+  private onRtcConnectFailed(error: Error, scheduleReconnect = true): void {
     this.emit(
       "connection error",
       this,
@@ -1310,7 +1340,7 @@ export class Station extends TypedEmitter<StationEvents> {
             context: { station: this.getSerial() },
           })
     );
-    if (!this.terminating) {
+    if (!this.terminating && scheduleReconnect) {
       this.rtcReconnectFailures++;
       this.scheduleRtcReconnect();
     }

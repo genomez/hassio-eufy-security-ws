@@ -195,11 +195,16 @@ index 6c96af5..00583b0 100755
  import { IncomingMessageDriver } from "./driver/incoming_message.js";
  import { dumpState } from "./state.js";
  import { LogLevel, LoggingEventForwarder } from "./logging.js";
-@@ -712,6 +713,11 @@ export class EufySecurityServer
+@@ -712,6 +713,16 @@ export class EufySecurityServer
      this.logger.info(
        `Eufy Security server listening on host ${this.options.host}, port ${this.options.port}`,
      );
 +    this.driver.on("connect", () => {
++      if (this.sockets) {
++        void ensureMegaLogin(this.driver, this.sockets, this.logger);
++      }
++    });
++    this.driver.on("mega auth recovery required", () => {
 +      if (this.sockets) {
 +        void ensureMegaLogin(this.driver, this.sockets, this.logger);
 +      }

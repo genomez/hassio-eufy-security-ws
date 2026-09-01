@@ -1,6 +1,6 @@
-name: eufy-security-ws regional handoff diagnostic
-description: Opt-in T9000 sign-request and handoff deadline diagnostic based on regional RTC RC2
-version: 3.0.18-regional-handoff-test2
+name: eufy-security-ws regional auth recovery diagnostic
+description: Opt-in T9000 revoked Mega session recovery diagnostic based on regional RTC test2
+version: 3.0.18-regional-auth-test3
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

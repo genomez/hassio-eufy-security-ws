@@ -1,5 +1,5 @@
 import { TypedEmitter } from "tiny-typed-emitter";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import * as path from "path";
 import * as util from "util";
 import { Readable } from "stream";
@@ -25,6 +25,7 @@ import {
 import { Station } from "./http/station";
 import { HUB_FIRST_CLOUD_REFRESH_DELAY_MS } from "./http/hubAuthoritative";
 import { EventImageCache } from "./http/eventImageCache";
+import { GuardedMegaAuthRecovery, MegaAuthRecoveryResult } from "./http/megaAuthRecovery";
 import { ConfirmInvite, DeviceListResponse, HouseInviteListResponse, Invite, StationListResponse } from "./http/models";
 import {
   CommandName,
@@ -135,6 +136,7 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
 
   private api!: HTTPApi;
   private megaApi?: MegaHTTPApi;
+  private megaAuthRecovery?: GuardedMegaAuthRecovery;
 
   private houses: Houses = {};
   private stations: Stations = {};
@@ -423,6 +425,7 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     this.api.setSerialNumber(this.persistentData.serial_number);
 
     this.syncMegaRtcCredentialsToApi();
+    this.configureMegaAuthRecovery();
     this.api.setMegaCloudWakeHandler(async () => {
       try {
         const mega = await this.getMegaApi();
@@ -1748,6 +1751,13 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
       this.syncMegaRtcCredentialsToApi(this.persistentData.megaApi);
       rootMainLogger.info("v6 login: success, mega session persisted");
       try {
+        this.resumeStationsAfterMegaAuthRecovery();
+      } catch (err) {
+        rootMainLogger.warn("v6 RTC auth recovery: unable to schedule station resume", {
+          error: getError(ensureError(err)),
+        });
+      }
+      try {
         await this.syncMegaPushRegistration();
       } catch {
         // push may not be initialized yet (e.g. during isolated loginMega tests)
@@ -1888,6 +1898,94 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     } catch (err) {
       const error = ensureError(err);
       rootMainLogger.error("WritePersistentData Error", { error: getError(error) });
+    }
+  }
+
+  private configureMegaAuthRecovery(): void {
+    this.megaAuthRecovery = new GuardedMegaAuthRecovery({
+      isRtcConnected: () =>
+        Object.values(this.stations).some(
+          (station) => station.isStationHomeBaseProfessionalS1() && station.isConnected()
+        ),
+      readLastAttemptAt: () => this.readMegaAuthRecoveryAttemptAt(),
+      createPersistenceBackup: () => this.backupPersistenceBeforeMegaAuthRecovery(),
+      recordAttemptAt: (attemptedAt) => this.writeMegaAuthRecoveryAttemptAt(attemptedAt),
+      clearMegaSession: () => this.clearMegaSessionForAuthRecovery(),
+    });
+    this.api.setMegaRtcAuthRecoveryHandler(async (): Promise<MegaAuthRecoveryResult> => {
+      const result = await this.megaAuthRecovery!.run();
+      if (result.status === "cleared_reauth_required") {
+        rootMainLogger.warn(
+          "v6 RTC auth recovery: stale Mega session backed up and cleared; starting normal reauthentication"
+        );
+        setTimeout(() => this.emit("mega auth recovery required"), 0);
+      } else {
+        rootMainLogger.warn("v6 RTC auth recovery did not clear the session", {
+          status: result.status,
+          failedStage: result.failedStage,
+          cooldownUntil: result.cooldownUntil,
+        });
+      }
+      return result;
+    });
+  }
+
+  private getMegaAuthRecoveryStateFile(): string {
+    return path.join(this.config.persistentDir!, "mega_auth_recovery_test3.json");
+  }
+
+  private readMegaAuthRecoveryAttemptAt(): number | undefined {
+    const stateFile = this.getMegaAuthRecoveryStateFile();
+    if (!existsSync(stateFile)) {
+      return undefined;
+    }
+    const parsed = JSON.parse(readFileSync(stateFile, "utf8")) as { attemptedAt?: unknown };
+    return typeof parsed.attemptedAt === "number" && Number.isFinite(parsed.attemptedAt)
+      ? parsed.attemptedAt
+      : undefined;
+  }
+
+  private writeMegaAuthRecoveryAttemptAt(attemptedAt: number): void {
+    const stateFile = this.getMegaAuthRecoveryStateFile();
+    const temporaryFile = `${stateFile}.tmp-${process.pid}`;
+    writeFileSync(temporaryFile, JSON.stringify({ schema: 1, attemptedAt }), { mode: 0o600 });
+    renameSync(temporaryFile, stateFile);
+    chmodSync(stateFile, 0o600);
+  }
+
+  private backupPersistenceBeforeMegaAuthRecovery(): void {
+    if (this.config.persistentData || !this.persistentFile || !existsSync(this.persistentFile)) {
+      throw new Error("file-backed persistence is required for guarded Mega auth recovery");
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupFile = path.join(this.config.persistentDir!, `persistent.json.pre-mega-auth-test3-${timestamp}`);
+    copyFileSync(this.persistentFile, backupFile);
+    chmodSync(backupFile, 0o600);
+    rootMainLogger.info("v6 RTC auth recovery: local persistence backup created");
+  }
+
+  private clearMegaSessionForAuthRecovery(): void {
+    delete this.persistentData.megaApi;
+    this.megaApi = undefined;
+    this.api.setMegaRtcCredentials(undefined);
+    this.writePersistentData();
+
+    const persisted = JSON.parse(readFileSync(this.persistentFile, "utf8")) as EufySecurityPersistentData;
+    if (persisted.megaApi !== undefined) {
+      throw new Error("Mega session removal did not persist");
+    }
+  }
+
+  private resumeStationsAfterMegaAuthRecovery(): void {
+    for (const station of Object.values(this.stations)) {
+      if (station.isStationHomeBaseProfessionalS1()) {
+        void station.resumeRtcAfterMegaAuthRecovery().catch((err) => {
+          rootMainLogger.warn("v6 RTC auth recovery: station resume failed", {
+            stationSN: station.getSerial(),
+            error: getError(ensureError(err)),
+          });
+        });
+      }
     }
   }
 

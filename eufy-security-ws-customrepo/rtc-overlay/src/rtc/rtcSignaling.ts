@@ -34,6 +34,35 @@ export interface RtcSignFetchOptions {
   reportPhase?: (phase: string, details?: Record<string, unknown>) => void;
 }
 
+export class RtcSignalingFetchError extends Error {
+  constructor(
+    message: string,
+    public readonly httpStatus: number,
+    public readonly apiCode: number | undefined,
+    public readonly revokedMegaToken: boolean
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+    this.name = "RtcSignalingFetchError";
+  }
+}
+
+function isRevokedMegaTokenResponse(status: number, message?: string): boolean {
+  if (status !== 401 || !message) {
+    return false;
+  }
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("token") &&
+    (normalized.includes("kicked out") || normalized.includes("does not exist") || normalized.includes("not exist"))
+  );
+}
+
+/** Fail-closed classifier: only errors typed at the sign endpoint can trigger recovery. */
+export function isRevokedMegaTokenSignError(error: unknown): error is RtcSignalingFetchError {
+  return error instanceof RtcSignalingFetchError && error.revokedMegaToken;
+}
+
 function base64urlJson(obj: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(obj), "utf8")
     .toString("base64")
@@ -107,7 +136,15 @@ export class RtcSignalingClient extends EventEmitter {
       const body = (await res.json()) as { code?: number; data?: string; msg?: string };
       report("fetch_sign_body_read_complete", { apiCode: body.code, hasData: !!body.data });
       if (!res.ok || body.code !== 0 || !body.data) {
-        throw new Error(`RtcSignaling fetchSign failed: HTTP ${res.status} ${body.msg ?? ""}`);
+        const revokedMegaToken = isRevokedMegaTokenResponse(res.status, body.msg);
+        throw new RtcSignalingFetchError(
+          revokedMegaToken
+            ? `RtcSignaling fetchSign failed: HTTP ${res.status} revoked mega token`
+            : `RtcSignaling fetchSign failed: HTTP ${res.status} ${body.msg ?? ""}`,
+          res.status,
+          body.code,
+          revokedMegaToken
+        );
       }
       this.sign = body.data;
       return body.data;

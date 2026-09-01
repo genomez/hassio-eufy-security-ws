@@ -3,9 +3,9 @@
 FROM ghcr.io/home-assistant/amd64-base:3.23
 
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
-ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#regional-rtc-handoff-diagnostic-v2
+ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#regional-rtc-auth-recovery-test3
 # Bump when EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG EUFY_CLIENT_BUILD_ID=regional-handoff-test2-sign-deadline-20260901a
+ARG EUFY_CLIENT_BUILD_ID=regional-auth-test3-revoked-session-20260901a
 
 COPY rtc-overlay /tmp/rtc-overlay
 
@@ -47,6 +47,8 @@ RUN \
          && cp /tmp/rtc-overlay/src/http/device.ts /tmp/eufy-security-client/src/http/device.ts \
          && cp /tmp/rtc-overlay/src/http/hubAuthoritative.ts /tmp/eufy-security-client/src/http/hubAuthoritative.ts \
          && cp /tmp/rtc-overlay/src/http/eventImageCache.ts /tmp/eufy-security-client/src/http/eventImageCache.ts \
+         && cp /tmp/rtc-overlay/src/http/megaAuthRecovery.ts /tmp/eufy-security-client/src/http/megaAuthRecovery.ts \
+         && cp /tmp/rtc-overlay/src/interfaces.ts /tmp/eufy-security-client/src/interfaces.ts \
          && cp /tmp/rtc-overlay/src/eufysecurity.ts /tmp/eufy-security-client/src/eufysecurity.ts \
          && grep -q 'export \* from "./rtc"' /tmp/eufy-security-client/src/index.ts \
             || printf '\nexport * from "./rtc";\n' >> /tmp/eufy-security-client/src/index.ts \

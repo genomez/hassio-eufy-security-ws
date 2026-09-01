@@ -84,6 +84,7 @@ import {
 import { getNullTerminatedString } from "../p2p/utils";
 import { rootHTTPLogger } from "../logging";
 import { MegaRtcCredentials } from "../rtc/types";
+import { MegaAuthRecoveryResult } from "./megaAuthRecovery";
 import {
   describePassportProfileEnvelope,
   extractPassportProfileCiphertext,
@@ -106,6 +107,7 @@ export class HTTPApi extends TypedEmitter<HTTPApiEvents> {
   private token: string | null = null;
   private tokenExpiration: Date | null = null;
   private megaRtcCredentials?: MegaRtcCredentials;
+  private megaRtcAuthRecoveryHandler?: () => Promise<MegaAuthRecoveryResult>;
   /** Optional mega-house wake (e.g. `/app/house/get_devs_list`) from {@link EufySecurity}. */
   private megaCloudWakeHandler?: () => Promise<void>;
   private renewAuthTokenJob?: schedule.Job;
@@ -1230,12 +1232,23 @@ export class HTTPApi extends TypedEmitter<HTTPApiEvents> {
   }
 
   /** eufy_mega token for T9000 WebRTC signaling (set from {@link EufySecurity} mega session). */
-  public setMegaRtcCredentials(credentials: MegaRtcCredentials): void {
+  public setMegaRtcCredentials(credentials: MegaRtcCredentials | undefined): void {
     this.megaRtcCredentials = credentials;
   }
 
   public getMegaRtcCredentials(): MegaRtcCredentials | null {
     return this.megaRtcCredentials ?? null;
+  }
+
+  public setMegaRtcAuthRecoveryHandler(handler: (() => Promise<MegaAuthRecoveryResult>) | undefined): void {
+    this.megaRtcAuthRecoveryHandler = handler;
+  }
+
+  public async recoverRevokedMegaRtcSession(): Promise<MegaAuthRecoveryResult> {
+    if (!this.megaRtcAuthRecoveryHandler) {
+      return { status: "not_configured" };
+    }
+    return this.megaRtcAuthRecoveryHandler();
   }
 
   /**
