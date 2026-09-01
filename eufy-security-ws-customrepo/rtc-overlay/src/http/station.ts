@@ -218,6 +218,8 @@ export class Station extends TypedEmitter<StationEvents> {
   private rtcDeferredCloudRefreshTimer?: NodeJS.Timeout;
   private rtcPollWatchdog?: NodeJS.Timeout;
   private rtcProactiveReconnectTimer?: NodeJS.Timeout;
+  private rtcHandoffDeadlineTimer?: NodeJS.Timeout;
+  private rtcHandoffAbortController?: AbortController;
   private rtcPollMisses = 0;
   private rtcLastDbPollAckAt = 0;
   private rtcCommandHandlerWired = false;
@@ -1148,6 +1150,7 @@ export class Station extends TypedEmitter<StationEvents> {
   public close(): void {
     this.terminating = true;
     this.clearRtcCatchupTimers();
+    this.cancelActiveRtcHandoff("station_close");
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = undefined;
@@ -1274,6 +1277,7 @@ export class Station extends TypedEmitter<StationEvents> {
     this.stopRtcLivePoll();
     this.stopRtcPropertyRefresh();
     this.clearProactiveRtcReconnect();
+    this.cancelActiveRtcHandoff("rtc_disconnect");
     this.clearRtcPollWatchdog();
     this.rtcPollMisses = 0;
     this.p2pSession.setRtcCommandTransport(undefined);
@@ -2670,6 +2674,36 @@ export class Station extends TypedEmitter<StationEvents> {
     }
   }
 
+  private releaseRtcHandoffDeadline(abortController: AbortController): void {
+    if (this.rtcHandoffAbortController !== abortController) {
+      return;
+    }
+    if (this.rtcHandoffDeadlineTimer !== undefined) {
+      clearTimeout(this.rtcHandoffDeadlineTimer);
+      this.rtcHandoffDeadlineTimer = undefined;
+    }
+    this.rtcHandoffAbortController = undefined;
+    rootHTTPLogger.info("T9000 RTC station handoff deadline cleared", {
+      stationSN: this.getSerial(),
+    });
+  }
+
+  private cancelActiveRtcHandoff(reason: string): void {
+    if (this.rtcHandoffDeadlineTimer !== undefined) {
+      clearTimeout(this.rtcHandoffDeadlineTimer);
+      this.rtcHandoffDeadlineTimer = undefined;
+    }
+    const abortController = this.rtcHandoffAbortController;
+    this.rtcHandoffAbortController = undefined;
+    if (abortController && !abortController.signal.aborted) {
+      rootHTTPLogger.info("T9000 RTC station handoff deadline cancelled", {
+        stationSN: this.getSerial(),
+        reason,
+      });
+      abortController.abort(new Error(`T9000 RTC handoff cancelled: ${reason}`));
+    }
+  }
+
   private hardReconnectAfterRtcHandoffFailure(reason: string, attempt: number): void {
     rootHTTPLogger.warn("T9000 RTC handoff recovery falling back to hard reconnect", {
       stationSN: this.getSerial(),
@@ -2679,6 +2713,7 @@ export class Station extends TypedEmitter<StationEvents> {
     this.rtcPollMisses = 0;
     this.clearRtcPollWatchdog();
     this.clearProactiveRtcReconnect();
+    this.cancelActiveRtcHandoff("hard_reconnect");
     this.rtcTransport?.close();
   }
 
@@ -2790,9 +2825,32 @@ export class Station extends TypedEmitter<StationEvents> {
     if (!transport?.isConnected() || this.terminating) {
       return;
     }
-    void transport
-      .handoffConnect()
-      .then((ok) => {
+    this.cancelActiveRtcHandoff("superseded");
+    const abortController = new AbortController();
+    this.rtcHandoffAbortController = abortController;
+    const configuredDeadlineMs = Number(process.env.RTC_HANDOFF_STATION_DEADLINE_MS ?? 50_000);
+    const deadlineMs = Number.isFinite(configuredDeadlineMs) ? Math.max(15_000, configuredDeadlineMs) : 50_000;
+    this.rtcHandoffDeadlineTimer = setTimeout(() => {
+      this.rtcHandoffDeadlineTimer = undefined;
+      if (this.rtcHandoffAbortController !== abortController || abortController.signal.aborted) {
+        return;
+      }
+      rootHTTPLogger.warn("T9000 RTC station handoff absolute deadline fired", {
+        stationSN: this.getSerial(),
+        attempt,
+        deadlineMs,
+      });
+      abortController.abort(new Error("T9000 RTC station handoff absolute deadline"));
+    }, deadlineMs);
+    rootHTTPLogger.info("T9000 RTC station handoff absolute deadline armed", {
+      stationSN: this.getSerial(),
+      attempt,
+      deadlineMs,
+    });
+
+    void (async () => {
+      try {
+        const ok = await transport.handoffConnect(abortController.signal);
         if (this.terminating) {
           return;
         }
@@ -2806,8 +2864,7 @@ export class Station extends TypedEmitter<StationEvents> {
           return;
         }
         this.handleFailedProactiveRtcHandoff(attempt);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (this.terminating) {
           return;
         }
@@ -2818,7 +2875,10 @@ export class Station extends TypedEmitter<StationEvents> {
           error: getError(error),
         });
         this.handleFailedProactiveRtcHandoff(attempt);
-      });
+      } finally {
+        this.releaseRtcHandoffDeadline(abortController);
+      }
+    })();
   }
 
   private scheduleProactiveRtcReconnect(): void {

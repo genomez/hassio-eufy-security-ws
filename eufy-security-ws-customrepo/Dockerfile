@@ -3,9 +3,9 @@
 FROM ghcr.io/home-assistant/amd64-base:3.23
 
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
-ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#regional-rtc-handoff-diagnostic-v1
+ARG EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#regional-rtc-handoff-diagnostic-v2
 # Bump when EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG EUFY_CLIENT_BUILD_ID=regional-handoff-test1-terminal-guard-20260831a
+ARG EUFY_CLIENT_BUILD_ID=regional-handoff-test2-sign-deadline-20260901a
 
 COPY rtc-overlay /tmp/rtc-overlay
 

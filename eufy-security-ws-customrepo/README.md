@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-stable-v1`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-handoff-diagnostic-v2`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -53,6 +53,14 @@ armed before the replacement connection starts; if the inner lifecycle does
 not settle, only the replacement session is closed and the working original
 session is retained. A `finally` marker records terminal cleanup for every
 handoff attempt.
+
+Version `3.0.18-regional-handoff-test2` follows the FR/EU test1 result that
+stopped at `fetch_sign_start` while the original RTC command session remained
+healthy. It adds a 15-second abortable sign request with sanitized request,
+response-header, body-read, rejection, and abort phases; a five-second
+monotonic handoff heartbeat with event-loop lag; and a separate station-level
+50-second absolute deadline. Either deadline closes only the replacement and
+retains the working original session for the existing probe/retry path.
 
 The diagnostic does not change regional endpoint selection, authentication
 data, SCTP packet size, answerer/client-offer mode, proactive handoff timing,

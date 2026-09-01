@@ -14,7 +14,7 @@ export interface StationRtcTransportEvents {
 }
 
 type RtcConnectWaitSession = Pick<RtcSession, "connect" | "on" | "off">;
-type RtcHandoffPhaseReporter = (phase: string) => void;
+type RtcHandoffPhaseReporter = (phase: string, details?: Record<string, unknown>) => void;
 
 /**
  * Arm the session events and the timeout as one immediately observed promise.
@@ -108,11 +108,13 @@ export function runWithHandoffTerminalTimeout<T>(
   attemptFactory: () => Promise<T>,
   timeoutMs: number,
   onTimeout: () => void,
-  reportPhase?: RtcHandoffPhaseReporter
+  reportPhase?: RtcHandoffPhaseReporter,
+  externalSignal?: AbortSignal
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    let externalAbortHandler: (() => void) | undefined;
 
     const report = (phase: string): void => {
       try {
@@ -125,6 +127,10 @@ export function runWithHandoffTerminalTimeout<T>(
       if (timer !== undefined) {
         clearTimeout(timer);
         timer = undefined;
+      }
+      if (externalAbortHandler !== undefined && externalSignal !== undefined) {
+        externalSignal.removeEventListener("abort", externalAbortHandler);
+        externalAbortHandler = undefined;
       }
     };
     const succeed = (value: T): void => {
@@ -144,19 +150,39 @@ export function runWithHandoffTerminalTimeout<T>(
       reject(error instanceof Error ? error : new Error(String(error)));
     };
 
-    timer = setTimeout(() => {
+    const terminateAttempt = (phase: string, error: Error): void => {
       if (settled) {
         return;
       }
-      report("outer_watchdog_fired");
+      report(phase);
       try {
         onTimeout();
       } catch {
         report("outer_watchdog_cleanup_threw");
       }
-      fail(new Error("T9000 RTC handoff outer timeout"));
+      fail(error);
+    };
+
+    timer = setTimeout(() => {
+      terminateAttempt("outer_watchdog_fired", new Error("T9000 RTC handoff outer timeout"));
     }, timeoutMs);
     report("outer_watchdog_armed");
+
+    if (externalSignal !== undefined) {
+      externalAbortHandler = () => {
+        const reason = externalSignal.reason;
+        terminateAttempt(
+          "outer_external_abort_received",
+          reason instanceof Error ? reason : new Error("T9000 RTC handoff externally aborted")
+        );
+      };
+      externalSignal.addEventListener("abort", externalAbortHandler, { once: true });
+      report("outer_external_abort_armed");
+      if (externalSignal.aborted) {
+        externalAbortHandler();
+        return;
+      }
+    }
 
     let attempt: Promise<T>;
     try {
@@ -284,7 +310,7 @@ export class StationRtcTransport extends EventEmitter {
    * hub's ~337s command-path cliff forces a refresh. Returns false if handoff fails (caller
    * may fall back to hard close).
    */
-  public async handoffConnect(): Promise<boolean> {
+  public async handoffConnect(externalSignal?: AbortSignal): Promise<boolean> {
     if (!this.credentials.authToken || !this.credentials.userId) {
       return false;
     }
@@ -306,10 +332,14 @@ export class StationRtcTransport extends EventEmitter {
     this.handoffInProgress = true;
     const oldSession = this.session;
     const startedAt = Date.now();
+    const monotonicStartedAt = performance.now();
     const handoffId = ++this.handoffSequence;
     let newSession: RtcSession | undefined;
     let replacementClosed = false;
     let terminalOutcome: "complete" | "failed" = "failed";
+    const heartbeatIntervalMs = 5_000;
+    let nextHeartbeatAt = monotonicStartedAt + heartbeatIntervalMs;
+    let heartbeatTimer: NodeJS.Timeout | undefined;
 
     rootHTTPLogger.info("StationRtcTransport handoff starting — second session while first stays up", {
       stationSn: this.stationSn,
@@ -317,12 +347,13 @@ export class StationRtcTransport extends EventEmitter {
       timeoutMs: this.connectTimeoutMs,
     });
 
-    const reportPhase = (phase: string): void => {
+    const reportPhase = (phase: string, details: Record<string, unknown> = {}): void => {
       rootHTTPLogger.info("StationRtcTransport handoff phase", {
         stationSn: this.stationSn,
         handoffId,
         phase,
         elapsedMs: Date.now() - startedAt,
+        ...details,
       });
     };
     const closeReplacement = (phase: string): void => {
@@ -338,6 +369,16 @@ export class StationRtcTransport extends EventEmitter {
       }
     };
 
+    heartbeatTimer = setInterval(() => {
+      const monotonicNow = performance.now();
+      reportPhase("handoff_heartbeat", {
+        monotonicElapsedMs: Math.round(monotonicNow - monotonicStartedAt),
+        eventLoopLagMs: Math.max(0, Math.round(monotonicNow - nextHeartbeatAt)),
+      });
+      nextHeartbeatAt += heartbeatIntervalMs;
+    }, heartbeatIntervalMs);
+    reportPhase("handoff_heartbeat_armed", { intervalMs: heartbeatIntervalMs });
+
     try {
       newSession = this.createSession(handoffId);
       reportPhase("replacement_created");
@@ -350,7 +391,8 @@ export class StationRtcTransport extends EventEmitter {
         () => connectAndWaitForRtcSession(newSession as RtcSession, 0, reportPhase),
         this.connectTimeoutMs,
         () => closeReplacement("replacement_timeout_close"),
-        reportPhase
+        reportPhase,
+        externalSignal
       );
       reportPhase("replacement_connected");
 
@@ -401,6 +443,11 @@ export class StationRtcTransport extends EventEmitter {
       }
       return false;
     } finally {
+      if (heartbeatTimer !== undefined) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+        reportPhase("handoff_heartbeat_cleared");
+      }
       this.handoffInProgress = false;
       this.retiringSession = false;
       rootHTTPLogger.info("StationRtcTransport handoff finalized", {

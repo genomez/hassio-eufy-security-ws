@@ -66,6 +66,11 @@ export class RtcSession extends EventEmitter {
   private messageChain: Promise<void> = Promise.resolve();
   private signalingKeepaliveTimer?: NodeJS.Timeout;
   private readonly signalingKeepaliveMs = 25_000;
+  private fetchSignAbortController?: AbortController;
+  private readonly fetchSignTimeoutMs = Math.max(
+    5_000,
+    Number(process.env.RTC_FETCH_SIGN_TIMEOUT_MS ?? "15000") || 15_000
+  );
 
   constructor(private readonly opts: RtcSessionOptions) {
     super();
@@ -140,7 +145,31 @@ export class RtcSession extends EventEmitter {
 
   public async connect(): Promise<void> {
     this.reportHandoffPhase("fetch_sign_start");
-    await this.signaling.fetchSign();
+    const abortController = new AbortController();
+    this.fetchSignAbortController = abortController;
+    const fetchSignTimer = setTimeout(() => {
+      this.reportHandoffPhase("fetch_sign_abort_timer_fired", { timeoutMs: this.fetchSignTimeoutMs });
+      abortController.abort(new Error(`RtcSignaling fetchSign timeout after ${this.fetchSignTimeoutMs}ms`));
+    }, this.fetchSignTimeoutMs);
+    this.reportHandoffPhase("fetch_sign_abort_timer_armed", { timeoutMs: this.fetchSignTimeoutMs });
+    try {
+      await this.signaling.fetchSign({
+        signal: abortController.signal,
+        reportPhase: (phase, details) => this.reportHandoffPhase(phase, details),
+      });
+    } catch (error) {
+      this.reportHandoffPhase("fetch_sign_failed", {
+        aborted: abortController.signal.aborted,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      throw error;
+    } finally {
+      clearTimeout(fetchSignTimer);
+      if (this.fetchSignAbortController === abortController) {
+        this.fetchSignAbortController = undefined;
+      }
+      this.reportHandoffPhase("fetch_sign_abort_timer_cleared");
+    }
     this.reportHandoffPhase("fetch_sign_complete");
     this.reportHandoffPhase("websocket_connect_start");
     await this.signaling.connect();
@@ -165,6 +194,10 @@ export class RtcSession extends EventEmitter {
     this.reportHandoffPhase("session_close_called");
     this.closed = true;
     this.connected = false;
+    if (this.fetchSignAbortController && !this.fetchSignAbortController.signal.aborted) {
+      this.reportHandoffPhase("fetch_sign_aborted_by_session_close");
+      this.fetchSignAbortController.abort(new Error("RtcSession closed during fetchSign"));
+    }
     this.clearHubOfferFallback();
     this.stopSignalingKeepalive();
     try {

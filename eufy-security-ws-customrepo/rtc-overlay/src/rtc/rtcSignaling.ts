@@ -29,6 +29,11 @@ export interface RtcSignalingEvents {
   error: (err: Error) => void;
 }
 
+export interface RtcSignFetchOptions {
+  signal?: AbortSignal;
+  reportPhase?: (phase: string, details?: Record<string, unknown>) => void;
+}
+
 function base64urlJson(obj: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(obj), "utf8")
     .toString("base64")
@@ -44,9 +49,7 @@ function base64urlJson(obj: Record<string, unknown>): string {
 export class RtcSignalingClient extends EventEmitter {
   private ws?: WebSocket;
   private sign?: string;
-  private readonly opts: Required<
-    Pick<RtcSignalingOptions, "smartHost" | "source" | "connectTimeoutMs" | "region">
-  > &
+  private readonly opts: Required<Pick<RtcSignalingOptions, "smartHost" | "source" | "connectTimeoutMs" | "region">> &
     RtcSignalingOptions;
 
   constructor(options: RtcSignalingOptions) {
@@ -70,10 +73,17 @@ export class RtcSignalingClient extends EventEmitter {
   }
 
   /** GET /v1/smart/nvr/ws/sign */
-  public async fetchSign(): Promise<string> {
+  public async fetchSign(options: RtcSignFetchOptions = {}): Promise<string> {
     const host = this.opts.smartHost ?? DEFAULT_SMART_HOST;
     const url = `https://${host}/v1/smart/nvr/ws/sign`;
-    const res = await fetch(url, {
+    const report = (phase: string, details: Record<string, unknown> = {}): void => {
+      try {
+        options.reportPhase?.(phase, details);
+      } catch {
+        /* diagnostics must never change signaling behavior */
+      }
+    };
+    const requestOptions: RequestInit = {
       headers: {
         "Web-Country": this.opts.region,
         "X-Auth-Token": this.opts.authToken,
@@ -82,13 +92,31 @@ export class RtcSignalingClient extends EventEmitter {
         GToken: this.opts.gtoken,
         Origin: "https://security.eufy.com",
       },
-    });
-    const body = (await res.json()) as { code?: number; data?: string; msg?: string };
-    if (!res.ok || body.code !== 0 || !body.data) {
-      throw new Error(`RtcSignaling fetchSign failed: HTTP ${res.status} ${body.msg ?? ""}`);
+    };
+    if (options.signal !== undefined) {
+      requestOptions.signal = options.signal;
     }
-    this.sign = body.data;
-    return body.data;
+
+    try {
+      report("fetch_sign_request_dispatching");
+      const responsePromise = fetch(url, requestOptions);
+      report("fetch_sign_request_dispatched");
+      const res = await responsePromise;
+      report("fetch_sign_response_headers", { status: res.status, ok: res.ok });
+      report("fetch_sign_body_read_start");
+      const body = (await res.json()) as { code?: number; data?: string; msg?: string };
+      report("fetch_sign_body_read_complete", { apiCode: body.code, hasData: !!body.data });
+      if (!res.ok || body.code !== 0 || !body.data) {
+        throw new Error(`RtcSignaling fetchSign failed: HTTP ${res.status} ${body.msg ?? ""}`);
+      }
+      this.sign = body.data;
+      return body.data;
+    } catch (error) {
+      report(options.signal?.aborted ? "fetch_sign_request_aborted" : "fetch_sign_request_rejected", {
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      throw error;
+    }
   }
 
   public async connect(): Promise<void> {
@@ -180,12 +208,7 @@ export class RtcSignalingClient extends EventEmitter {
   }
 
   /** Portal account field: HmacSHA256(channelId+adminUserId+ts, authToken). */
-  public static sessionAccount(
-    channelId: number,
-    adminUserId: string,
-    ts: number,
-    authToken: string
-  ): string {
+  public static sessionAccount(channelId: number, adminUserId: string, ts: number, authToken: string): string {
     const message = `${channelId}${adminUserId}${ts}`;
     return createHmac("sha256", authToken).update(message).digest("hex");
   }
