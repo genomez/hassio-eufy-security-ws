@@ -33,3 +33,7 @@ Version `3.0.18-wake-v6` gives each RTC session its own SCTP/WASM module and
 releases that module when the session closes. This prevents fixed-heap SCTP
 state from accumulating across repeated proactive handoffs, while preserving
 the established answerer mode, 800-byte SCTP packet size, and handoff timing.
+
+Version `3.0.18-wake-v7` retries Mega push registration once when the cached
+identity or signature is rejected, then persists the refreshed Mega session
+after success. Mega account identifiers are also removed from client logs.

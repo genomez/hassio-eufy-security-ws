@@ -7,4 +7,4 @@ codenotary:
 args:
   EUFY_SECURITY_WS_VERSION: 3.0.1
   EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#T9000-testing"
-  EUFY_CLIENT_BUILD_ID: "wake-v6-sctp-lifecycle-20260830a"
+  EUFY_CLIENT_BUILD_ID: "wake-v7-mega-push-retry-20260901a"

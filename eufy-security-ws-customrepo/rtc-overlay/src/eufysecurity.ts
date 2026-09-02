@@ -565,13 +565,32 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
 
   private async registerMegaPushToken(token: string): Promise<void> {
     try {
-      await this.getMegaApi();
-      if (!this.megaApi!.hasValidSession()) {
+      const mega = await this.getMegaApi();
+      if (!mega.hasValidSession()) {
         rootMainLogger.debug("v6 push: no valid mega session yet, skipping register (legacy still active)");
         return;
       }
-      const result = await this.megaApi!.registerPushToken(token);
+
+      const persistMegaSession = (): void => {
+        this.persistentData.megaApi = mega.exportSession(
+          megaLoginHash(this.config.username, this.config.password, this.persistentData.openudid)
+        );
+        this.writePersistentData();
+      };
+
+      let result = await mega.registerPushToken(token);
+      if (
+        result.code === ResponseErrorCode.CODE_NEED_NEGOTIATE_KEY ||
+        result.code === ResponseErrorCode.CODE_SIGNATURE_ERROR
+      ) {
+        rootMainLogger.info("v6 push: cached identity rejected, retrying register_push_token after re-key", {
+          code: result.code,
+          msg: result.msg,
+        });
+        result = await mega.registerPushToken(token);
+      }
       if (result.code === 0) {
+        persistMegaSession();
         rootMainLogger.info("v6 push: FCM token registered on the eufy_mega backend");
       } else {
         rootMainLogger.warn("v6 push: register_push_token returned a non-zero code", {
