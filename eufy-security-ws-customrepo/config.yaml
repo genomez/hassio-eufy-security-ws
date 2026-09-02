@@ -1,6 +1,6 @@
-name: eufy-security-ws regional RTC RC3
-description: Regional T9000 RTC candidate with guarded Mega recovery and an opt-in live-view diagnostic
-version: 3.0.18-regional-rtc-rc3
+name: eufy-security-ws regional RTC RC4
+description: Unified regional T9000 RTC build with guarded Mega recovery and bounded handoff reliability
+version: 3.0.18-regional-rtc-rc4
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-stable-rc3-build`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-unified-v1`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -105,3 +105,9 @@ wake behavior without switching repositories or changing the add-on data directo
 The diagnostic does not change regional endpoint selection, SCTP packet size,
 answerer/client-offer mode, proactive handoff timing, property refresh, or the
 existing Mega login lockout behavior.
+
+Version `3.0.18-regional-rtc-rc4` retains all RC3 regional and guarded-recovery
+behavior and adds the later production reliability protections. It retries
+Mega push registration once when the cached
+identity or signature is rejected, then persists the refreshed Mega session
+after success. Mega account identifiers are also removed from client logs.
