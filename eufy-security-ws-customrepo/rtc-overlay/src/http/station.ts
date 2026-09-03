@@ -214,6 +214,7 @@ export class Station extends TypedEmitter<StationEvents> {
   private p2pSession: P2PClientProtocol;
   private rtcTransport?: StationRtcTransport;
   private rtcConnectedAt?: number;
+  private rtcConnectionGeneration = 0;
   private rtcDisconnectedAt?: number;
   private rtcReconnectFailures = 0;
   private rtcAuthRecoveryBlocked = false;
@@ -1407,6 +1408,7 @@ export class Station extends TypedEmitter<StationEvents> {
     this.rtcNoOfferWakeRetryInFlight = false;
     this.rtcReconnectFailures = 0;
     this.resetCurrentDelay();
+    this.rtcConnectionGeneration++;
     this.rtcConnectedAt = Date.now();
     this.rtcLastDbPollAckAt = 0;
     this.p2pSession.resetRtcInboundDiagnostics();
@@ -3001,11 +3003,24 @@ export class Station extends TypedEmitter<StationEvents> {
     });
   }
 
+  private isRtcHandoffFailureSuperseded(
+    transport: StationRtcTransport,
+    connectionGeneration: number
+  ): boolean {
+    return (
+      this.rtcConnectionGeneration !== connectionGeneration &&
+      this.rtcTransport === transport &&
+      transport.isConnected() &&
+      transport.isCommandChannelReady()
+    );
+  }
+
   private attemptProactiveRtcHandoff(attempt: number): void {
     const transport = this.rtcTransport;
     if (!transport?.isConnected() || this.terminating) {
       return;
     }
+    const connectionGeneration = this.rtcConnectionGeneration;
     this.cancelActiveRtcHandoff("superseded");
     const abortController = new AbortController();
     this.rtcHandoffAbortController = abortController;
@@ -3044,9 +3059,29 @@ export class Station extends TypedEmitter<StationEvents> {
           });
           return;
         }
+        if (this.isRtcHandoffFailureSuperseded(transport, connectionGeneration)) {
+          rootHTTPLogger.info("T9000 RTC stale handoff failure ignored — newer session is healthy", {
+            stationSN: this.getSerial(),
+            attempt,
+            connectionGeneration,
+            currentConnectionGeneration: this.rtcConnectionGeneration,
+          });
+          this.scheduleProactiveRtcReconnect();
+          return;
+        }
         this.handleFailedProactiveRtcHandoff(attempt);
       } catch (err) {
         if (this.terminating) {
+          return;
+        }
+        if (this.isRtcHandoffFailureSuperseded(transport, connectionGeneration)) {
+          rootHTTPLogger.info("T9000 RTC stale handoff error ignored — newer session is healthy", {
+            stationSN: this.getSerial(),
+            attempt,
+            connectionGeneration,
+            currentConnectionGeneration: this.rtcConnectionGeneration,
+          });
+          this.scheduleProactiveRtcReconnect();
           return;
         }
         const error = ensureError(err);
