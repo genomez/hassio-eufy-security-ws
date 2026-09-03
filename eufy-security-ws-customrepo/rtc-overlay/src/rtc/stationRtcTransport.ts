@@ -258,12 +258,20 @@ export class StationRtcTransport extends EventEmitter {
       } catch {
         /* ignore */
       }
-      // Ensure we still point at the old session if swap never happened.
-      if (this.session !== oldSession && this.session !== newSession) {
-        this.session = oldSession;
-      } else if (this.session === newSession) {
+      // Restore the retained session only if this failed attempt installed its own
+      // replacement. A separate reconnect may have installed a newer primary while
+      // this handoff was pending; never overwrite that newer session with the old one.
+      if (this.session === newSession) {
         this.session = oldSession;
         this.wirePrimarySession(oldSession);
+      } else if (this.session !== oldSession) {
+        rootHTTPLogger.info(
+          "StationRtcTransport handoff cleanup preserved newer primary session",
+          {
+            stationSn: this.stationSn,
+            hasPrimarySession: this.session !== undefined,
+          },
+        );
       }
       this.handoffInProgress = false;
       this.retiringSession = false;
