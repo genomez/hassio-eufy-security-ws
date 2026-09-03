@@ -80,7 +80,9 @@ ICE with no selected pair, and a selected pair without an open command channel.
 Only the exact missing-offer state after `scall` status 100 and peer
 initialization can trigger one guarded cloud inventory wake and one clean retry
 in answerer mode. The retry is opt-in in the client and enabled only by this
-diagnostic image; successful connection resets its one-shot guard.
+diagnostic image; successful connection resets its one-shot guard. Test4
+explicitly disables the inherited Test3 Mega-auth recovery, so a revoked-token
+condition fails closed without changing persistence or starting a login.
 
 The diagnostic does not change regional endpoint selection, SCTP packet size,
 answerer/client-offer mode, proactive handoff timing, property refresh, or the

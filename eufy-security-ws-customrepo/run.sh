@@ -125,6 +125,8 @@ export RTC_HUB_OFFER_WAIT_MS="${RTC_HUB_OFFER_WAIT_MS:-0}"
 # retry once in answerer mode. The client defaults this path off unless explicitly enabled.
 export RTC_NO_OFFER_CLOUD_WAKE_RETRY="${RTC_NO_OFFER_CLOUD_WAKE_RETRY:-1}"
 export RTC_NO_OFFER_WAKE_SETTLE_MS="${RTC_NO_OFFER_WAKE_SETTLE_MS:-2000}"
+# Test4 must never mutate Mega authentication or persisted session data.
+export RTC_MEGA_AUTH_RECOVERY_ENABLED="${RTC_MEGA_AUTH_RECOVERY_ENABLED:-0}"
 # Send an explicit DTLS role in our offer (the hub can't negotiate from "actpass"): we are
 # active (DTLS client), so the hub must be passive (server). Answer role is coerced to match.
 export RTC_SIGNAL_SETUP="${RTC_SIGNAL_SETUP:-active}"

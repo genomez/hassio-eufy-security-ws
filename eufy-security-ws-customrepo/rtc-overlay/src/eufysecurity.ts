@@ -25,7 +25,7 @@ import {
 import { Station } from "./http/station";
 import { HUB_FIRST_CLOUD_REFRESH_DELAY_MS } from "./http/hubAuthoritative";
 import { EventImageCache } from "./http/eventImageCache";
-import { GuardedMegaAuthRecovery, MegaAuthRecoveryResult } from "./http/megaAuthRecovery";
+import { GuardedMegaAuthRecovery, isMegaAuthRecoveryEnabled, MegaAuthRecoveryResult } from "./http/megaAuthRecovery";
 import { ConfirmInvite, DeviceListResponse, HouseInviteListResponse, Invite, StationListResponse } from "./http/models";
 import {
   CommandName,
@@ -1902,6 +1902,12 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
   }
 
   private configureMegaAuthRecovery(): void {
+    if (!isMegaAuthRecoveryEnabled(process.env.RTC_MEGA_AUTH_RECOVERY_ENABLED)) {
+      this.megaAuthRecovery = undefined;
+      this.api.setMegaRtcAuthRecoveryHandler(undefined);
+      rootMainLogger.info("v6 RTC auth recovery disabled by configuration");
+      return;
+    }
     this.megaAuthRecovery = new GuardedMegaAuthRecovery({
       isRtcConnected: () =>
         Object.values(this.stations).some(

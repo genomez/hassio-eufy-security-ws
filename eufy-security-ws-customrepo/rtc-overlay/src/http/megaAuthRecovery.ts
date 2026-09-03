@@ -8,6 +8,10 @@ export interface MegaAuthRecoveryResult {
   failedStage?: "check_connection" | "read_cooldown" | "backup" | "record_cooldown" | "clear_session";
 }
 
+export function isMegaAuthRecoveryEnabled(value: string | undefined): boolean {
+  return value !== "0" && value?.toLowerCase() !== "false";
+}
+
 type MaybePromise<T> = T | Promise<T>;
 
 export interface MegaAuthRecoveryDependencies {
