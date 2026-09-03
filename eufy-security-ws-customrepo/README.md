@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-offer-wake-test4`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-app-live-view-test5`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -83,6 +83,15 @@ in answerer mode. The retry is opt-in in the client and enabled only by this
 diagnostic image; successful connection resets its one-shot guard. Test4
 explicitly disables the inherited Test3 Mega-auth recovery, so a revoked-token
 condition fails closed without changing persistence or starting a login.
+
+Version `3.0.18-regional-app-live-test5` follows the Test4 result where an
+applied inventory wake still ended before the hub supplied SDP. On the first
+exact `no_hub_sdp_offer` result, Test5 suppresses automatic reconnect, cloud,
+swipe/TURN, and Mega-auth recovery paths. It emits timed markers for one
+official-app live view, asks for that view to be closed, waits briefly, and
+makes exactly one answerer-mode RTC retry. A non-matching initial failure or a
+failed post-app retry stops without another automatic attempt. Closing the
+station cancels the observation timers.
 
 The diagnostic does not change regional endpoint selection, SCTP packet size,
 answerer/client-offer mode, proactive handoff timing, property refresh, or the

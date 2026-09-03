@@ -82,6 +82,41 @@ export function shouldRunNoOfferCloudWakeRetry(
   return enabled && !attempted && isNoHubSdpOfferTimeout(error);
 }
 
+export interface RtcAppLiveViewTestTiming {
+  prepareMs: number;
+  activeMs: number;
+  settleMs: number;
+}
+
+export function isRtcAppLiveViewTestEnabled(value: string | undefined): boolean {
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+export function shouldRunRtcAppLiveViewTest(
+  error: unknown,
+  enabled: boolean,
+  attempted: boolean
+): error is RtcConnectTimeoutError {
+  return enabled && !attempted && isNoHubSdpOfferTimeout(error);
+}
+
+function boundedRtcAppLiveViewDelay(value: string | undefined, fallbackMs: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 300_000)) : fallbackMs;
+}
+
+export function getRtcAppLiveViewTestTiming(values: {
+  prepareMs?: string;
+  activeMs?: string;
+  settleMs?: string;
+}): RtcAppLiveViewTestTiming {
+  return {
+    prepareMs: boundedRtcAppLiveViewDelay(values.prepareMs, 60_000),
+    activeMs: boundedRtcAppLiveViewDelay(values.activeMs, 30_000),
+    settleMs: boundedRtcAppLiveViewDelay(values.settleMs, 15_000),
+  };
+}
+
 interface ScallCallPayload {
   status?: number;
   turn?: RtcTurnConfig;

@@ -177,7 +177,14 @@ import { TalkbackStream } from "../p2p/talkback";
 import { start } from "repl";
 import { createHash, generateKeyPairSync } from "crypto";
 import { rootHTTPLogger } from "../logging";
-import { RtcSession, shouldRunNoOfferCloudWakeRetry } from "../rtc/rtcSession";
+import {
+  getRtcAppLiveViewTestTiming,
+  isRtcAppLiveViewTestEnabled,
+  RtcConnectTimeoutError,
+  RtcSession,
+  shouldRunNoOfferCloudWakeRetry,
+  shouldRunRtcAppLiveViewTest,
+} from "../rtc/rtcSession";
 import { RtcTurnConfig } from "../rtc/rtcPeer";
 import { StationRtcTransport } from "../rtc/stationRtcTransport";
 import { isRevokedMegaTokenSignError } from "../rtc/rtcSignaling";
@@ -212,6 +219,10 @@ export class Station extends TypedEmitter<StationEvents> {
   private rtcAuthRecoveryBlocked = false;
   private rtcNoOfferWakeRetryAttempted = false;
   private rtcNoOfferWakeRetryInFlight = false;
+  private rtcAppLiveViewTestAttempted = false;
+  private rtcAppLiveViewTestInFlight = false;
+  private rtcAppLiveViewTestPostActionRetryInFlight = false;
+  private rtcAppLiveViewTestAbortController?: AbortController;
   private rtcCloudWakeLastAt = 0;
   private rtcCloudWakeInFlight = false;
   private rtcLiveWakeLastAt = 0;
@@ -1154,6 +1165,7 @@ export class Station extends TypedEmitter<StationEvents> {
   public close(): void {
     this.terminating = true;
     this.clearRtcCatchupTimers();
+    this.cancelRtcAppLiveViewTest("station_close");
     this.cancelActiveRtcHandoff("station_close");
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
@@ -1190,7 +1202,13 @@ export class Station extends TypedEmitter<StationEvents> {
   }
 
   private async connectRtc(): Promise<void> {
-    if (this.rtcAuthRecoveryBlocked || this.rtcNoOfferWakeRetryInFlight) {
+    const appLiveViewTestEnabled = isRtcAppLiveViewTestEnabled(process.env.RTC_APP_LIVE_VIEW_TEST);
+    if (
+      this.rtcAuthRecoveryBlocked ||
+      this.rtcNoOfferWakeRetryInFlight ||
+      this.rtcAppLiveViewTestInFlight ||
+      (appLiveViewTestEnabled && this.rtcAppLiveViewTestAttempted && !this.rtcAppLiveViewTestPostActionRetryInFlight)
+    ) {
       return;
     }
     if (this.rtcTransport?.isConnected() || this.rtcTransport?.isConnecting()) {
@@ -1200,7 +1218,7 @@ export class Station extends TypedEmitter<StationEvents> {
     const creds = this.api.getMegaRtcCredentials();
     if (!creds) {
       rootHTTPLogger.warn(`T9000 ${this.getSerial()}: mega RTC credentials missing — loginMega required`);
-      this.onRtcConnectFailed(new Error("mega RTC credentials missing"));
+      this.onRtcConnectFailed(new Error("mega RTC credentials missing"), !appLiveViewTestEnabled);
       return;
     }
 
@@ -1246,8 +1264,23 @@ export class Station extends TypedEmitter<StationEvents> {
         return;
       }
       const noOfferWakeEnabled =
-        process.env.RTC_NO_OFFER_CLOUD_WAKE_RETRY === "1" ||
-        process.env.RTC_NO_OFFER_CLOUD_WAKE_RETRY === "true";
+        process.env.RTC_NO_OFFER_CLOUD_WAKE_RETRY === "1" || process.env.RTC_NO_OFFER_CLOUD_WAKE_RETRY === "true";
+      if (shouldRunRtcAppLiveViewTest(error, appLiveViewTestEnabled, this.rtcAppLiveViewTestAttempted)) {
+        this.rtcAppLiveViewTestAttempted = true;
+        this.rtcAppLiveViewTestInFlight = true;
+        const proceed = await this.runRtcAppLiveViewTestWindow(error.diagnostic.stage);
+        this.rtcAppLiveViewTestInFlight = false;
+        if (proceed && !this.terminating) {
+          this.rtcAppLiveViewTestPostActionRetryInFlight = true;
+          rootHTTPLogger.info("T9000 RTC test5 starting single post-app answerer retry");
+          try {
+            await this.connectRtc();
+          } finally {
+            this.rtcAppLiveViewTestPostActionRetryInFlight = false;
+          }
+        }
+        return;
+      }
       if (shouldRunNoOfferCloudWakeRetry(error, noOfferWakeEnabled, this.rtcNoOfferWakeRetryAttempted)) {
         this.rtcNoOfferWakeRetryAttempted = true;
         this.rtcNoOfferWakeRetryInFlight = true;
@@ -1270,7 +1303,89 @@ export class Station extends TypedEmitter<StationEvents> {
         }
         return;
       }
+      if (appLiveViewTestEnabled) {
+        rootHTTPLogger.warn(
+          this.rtcAppLiveViewTestPostActionRetryInFlight
+            ? "T9000 RTC test5 single post-app retry failed — automatic retries stopped"
+            : "T9000 RTC test5 stopped before observation window — initial stage was not no_hub_sdp_offer",
+          {
+            stage: error instanceof RtcConnectTimeoutError ? error.diagnostic.stage : "unclassified",
+          }
+        );
+        this.onRtcConnectFailed(error, false);
+        return;
+      }
       this.onRtcConnectFailed(error);
+    }
+  }
+
+  private async runRtcAppLiveViewTestWindow(stage: string): Promise<boolean> {
+    const timing = getRtcAppLiveViewTestTiming({
+      prepareMs: process.env.RTC_APP_LIVE_VIEW_PREPARE_MS,
+      activeMs: process.env.RTC_APP_LIVE_VIEW_ACTIVE_MS,
+      settleMs: process.env.RTC_APP_LIVE_VIEW_SETTLE_MS,
+    });
+    const abortController = new AbortController();
+    this.rtcAppLiveViewTestAbortController = abortController;
+    rootHTTPLogger.warn("T9000 RTC test5 app live-view observation window armed", {
+      stage,
+      prepareMs: timing.prepareMs,
+      activeMs: timing.activeMs,
+      settleMs: timing.settleMs,
+    });
+    try {
+      if (!(await this.waitForRtcAppLiveViewTestDelay(timing.prepareMs, abortController.signal))) {
+        return false;
+      }
+      rootHTTPLogger.warn("T9000 RTC test5 action marker — open one official Eufy app live view now");
+      if (!(await this.waitForRtcAppLiveViewTestDelay(timing.activeMs, abortController.signal))) {
+        return false;
+      }
+      rootHTTPLogger.warn("T9000 RTC test5 action marker — close the official Eufy app live view now");
+      return await this.waitForRtcAppLiveViewTestDelay(timing.settleMs, abortController.signal);
+    } finally {
+      if (this.rtcAppLiveViewTestAbortController === abortController) {
+        this.rtcAppLiveViewTestAbortController = undefined;
+      }
+    }
+  }
+
+  private waitForRtcAppLiveViewTestDelay(ms: number, signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) {
+      return Promise.resolve(false);
+    }
+    if (ms <= 0) {
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
+      let settled = false;
+      const finish = (completed: boolean): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer !== undefined) {
+          clearTimeout(timer);
+        }
+        signal.removeEventListener("abort", onAbort);
+        resolve(completed);
+      };
+      const onAbort = (): void => finish(false);
+      signal.addEventListener("abort", onAbort, { once: true });
+      timer = setTimeout(() => finish(true), ms);
+      if (signal.aborted) {
+        onAbort();
+      }
+    });
+  }
+
+  private cancelRtcAppLiveViewTest(reason: string): void {
+    const abortController = this.rtcAppLiveViewTestAbortController;
+    this.rtcAppLiveViewTestAbortController = undefined;
+    if (abortController && !abortController.signal.aborted) {
+      rootHTTPLogger.info("T9000 RTC test5 app live-view observation window cancelled", { reason });
+      abortController.abort(new Error(`T9000 RTC test5 cancelled: ${reason}`));
     }
   }
 
@@ -1284,6 +1399,9 @@ export class Station extends TypedEmitter<StationEvents> {
   }
 
   private onRtcConnect(): void {
+    if (this.rtcAppLiveViewTestPostActionRetryInFlight) {
+      rootHTTPLogger.info("T9000 RTC test5 single post-app retry connected");
+    }
     this.rtcAuthRecoveryBlocked = false;
     this.rtcNoOfferWakeRetryAttempted = false;
     this.rtcNoOfferWakeRetryInFlight = false;
@@ -2052,6 +2170,10 @@ export class Station extends TypedEmitter<StationEvents> {
   }
 
   private scheduleRtcReconnect(lastUptimeMs?: number): void {
+    if (isRtcAppLiveViewTestEnabled(process.env.RTC_APP_LIVE_VIEW_TEST)) {
+      rootHTTPLogger.info("T9000 RTC test5 automatic reconnect and wake paths suppressed");
+      return;
+    }
     if (this.reconnectTimeout || this.terminating) {
       return;
     }
