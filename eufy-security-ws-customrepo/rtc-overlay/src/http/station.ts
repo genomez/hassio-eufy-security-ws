@@ -177,7 +177,7 @@ import { TalkbackStream } from "../p2p/talkback";
 import { start } from "repl";
 import { createHash, generateKeyPairSync } from "crypto";
 import { rootHTTPLogger } from "../logging";
-import { RtcSession } from "../rtc/rtcSession";
+import { RtcSession, shouldRunNoOfferCloudWakeRetry } from "../rtc/rtcSession";
 import { RtcTurnConfig } from "../rtc/rtcPeer";
 import { StationRtcTransport } from "../rtc/stationRtcTransport";
 import { isRevokedMegaTokenSignError } from "../rtc/rtcSignaling";
@@ -210,6 +210,8 @@ export class Station extends TypedEmitter<StationEvents> {
   private rtcDisconnectedAt?: number;
   private rtcReconnectFailures = 0;
   private rtcAuthRecoveryBlocked = false;
+  private rtcNoOfferWakeRetryAttempted = false;
+  private rtcNoOfferWakeRetryInFlight = false;
   private rtcCloudWakeLastAt = 0;
   private rtcCloudWakeInFlight = false;
   private rtcLiveWakeLastAt = 0;
@@ -1188,7 +1190,7 @@ export class Station extends TypedEmitter<StationEvents> {
   }
 
   private async connectRtc(): Promise<void> {
-    if (this.rtcAuthRecoveryBlocked) {
+    if (this.rtcAuthRecoveryBlocked || this.rtcNoOfferWakeRetryInFlight) {
       return;
     }
     if (this.rtcTransport?.isConnected() || this.rtcTransport?.isConnecting()) {
@@ -1243,6 +1245,31 @@ export class Station extends TypedEmitter<StationEvents> {
         this.onRtcConnectFailed(error, false);
         return;
       }
+      const noOfferWakeEnabled =
+        process.env.RTC_NO_OFFER_CLOUD_WAKE_RETRY === "1" ||
+        process.env.RTC_NO_OFFER_CLOUD_WAKE_RETRY === "true";
+      if (shouldRunNoOfferCloudWakeRetry(error, noOfferWakeEnabled, this.rtcNoOfferWakeRetryAttempted)) {
+        this.rtcNoOfferWakeRetryAttempted = true;
+        this.rtcNoOfferWakeRetryInFlight = true;
+        rootHTTPLogger.warn("T9000 RTC test4 classified missing hub SDP offer — running one cloud-wake retry", {
+          stage: error.diagnostic.stage,
+        });
+        try {
+          await this.cloudWakeHubForRtc("no_hub_sdp_offer_test4");
+          const configuredSettleMs = Number(process.env.RTC_NO_OFFER_WAKE_SETTLE_MS ?? 2000);
+          const settleMs = Number.isFinite(configuredSettleMs) ? Math.max(0, configuredSettleMs) : 2000;
+          if (settleMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, settleMs));
+          }
+        } finally {
+          this.rtcNoOfferWakeRetryInFlight = false;
+        }
+        if (!this.terminating) {
+          rootHTTPLogger.info("T9000 RTC test4 starting post-wake answerer retry");
+          await this.connectRtc();
+        }
+        return;
+      }
       this.onRtcConnectFailed(error);
     }
   }
@@ -1258,6 +1285,8 @@ export class Station extends TypedEmitter<StationEvents> {
 
   private onRtcConnect(): void {
     this.rtcAuthRecoveryBlocked = false;
+    this.rtcNoOfferWakeRetryAttempted = false;
+    this.rtcNoOfferWakeRetryInFlight = false;
     this.rtcReconnectFailures = 0;
     this.resetCurrentDelay();
     this.rtcConnectedAt = Date.now();

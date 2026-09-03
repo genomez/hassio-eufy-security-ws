@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-auth-recovery-test3`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-offer-wake-test4`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -73,6 +73,14 @@ fresh RTC credentials and resumes the blocked T9000 connection. Recovery is
 single-flight and fail-closed; unrelated 401 responses, ordinary RTC failures,
 and proactive handoffs do not reset authentication. Logs contain status and
 phase markers, not tokens or authentication payloads.
+
+Version `3.0.18-regional-offer-test4` adds a sanitized terminal classifier for
+initial RTC timeouts. It distinguishes a missing hub SDP offer, SDP followed by
+ICE with no selected pair, and a selected pair without an open command channel.
+Only the exact missing-offer state after `scall` status 100 and peer
+initialization can trigger one guarded cloud inventory wake and one clean retry
+in answerer mode. The retry is opt-in in the client and enabled only by this
+diagnostic image; successful connection resets its one-shot guard.
 
 The diagnostic does not change regional endpoint selection, SCTP packet size,
 answerer/client-offer mode, proactive handoff timing, property refresh, or the

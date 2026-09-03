@@ -276,10 +276,12 @@ export class StationRtcTransport extends EventEmitter {
 
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const timeoutError = session.createConnectTimeoutError();
+        rootHTTPLogger.warn("T9000 RTC negotiation terminal summary", timeoutError.diagnostic);
         cleanup();
         this.connecting = false;
         this.closeSession();
-        reject(new Error("T9000 RTC connect timeout"));
+        reject(timeoutError);
       }, this.connectTimeoutMs);
 
       const onConnected = (): void => {

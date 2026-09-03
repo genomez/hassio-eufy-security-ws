@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 
 import { rootHTTPLogger } from "../logging";
-import { RtcPeerConnection, RtcPeerOptions, RtcTurnConfig } from "./rtcPeer";
+import { RtcPeerConnection, RtcPeerDiagnosticState, RtcPeerOptions, RtcTurnConfig } from "./rtcPeer";
 import { RtcSignalingClient } from "./rtcSignaling";
 import { scallJsonToSdpOffer } from "./rtcSdp";
 import { RtcSignalingOptions } from "./types";
@@ -29,6 +29,59 @@ export interface RtcSessionEvents {
   commandData: (data: Buffer, linkType?: number) => void;
 }
 
+export type RtcNegotiationStage =
+  | "connected"
+  | "no_hub_sdp_offer"
+  | "ice_no_selected_pair"
+  | "command_channel_not_open"
+  | "pre_scall_or_unclassified";
+
+export interface RtcNegotiationDiagnostic extends RtcPeerDiagnosticState {
+  stage: RtcNegotiationStage;
+  scallAccepted: boolean;
+  peerInitialized: boolean;
+  sdpHandled: boolean;
+  iceGatheringComplete: boolean;
+}
+
+export function classifyRtcNegotiationStage(
+  state: Omit<RtcNegotiationDiagnostic, "stage">
+): RtcNegotiationStage {
+  if (state.commandChannelOpen) {
+    return "connected";
+  }
+  if (state.scallAccepted && state.peerInitialized && !state.sdpHandled) {
+    return "no_hub_sdp_offer";
+  }
+  if (state.sdpHandled && !state.selectedPairPresent) {
+    return "ice_no_selected_pair";
+  }
+  if (state.selectedPairPresent) {
+    return "command_channel_not_open";
+  }
+  return "pre_scall_or_unclassified";
+}
+
+export class RtcConnectTimeoutError extends Error {
+  constructor(public readonly diagnostic: RtcNegotiationDiagnostic) {
+    super(`T9000 RTC connect timeout (${diagnostic.stage})`);
+    Object.setPrototypeOf(this, new.target.prototype);
+    this.name = "RtcConnectTimeoutError";
+  }
+}
+
+export function isNoHubSdpOfferTimeout(error: unknown): error is RtcConnectTimeoutError {
+  return error instanceof RtcConnectTimeoutError && error.diagnostic.stage === "no_hub_sdp_offer";
+}
+
+export function shouldRunNoOfferCloudWakeRetry(
+  error: unknown,
+  enabled: boolean,
+  attempted: boolean
+): error is RtcConnectTimeoutError {
+  return enabled && !attempted && isNoHubSdpOfferTimeout(error);
+}
+
 interface ScallCallPayload {
   status?: number;
   turn?: RtcTurnConfig;
@@ -54,6 +107,9 @@ export class RtcSession extends EventEmitter {
   private connectedAt?: number;
   private closed = false;
   private sdpHandled = false;
+  private scallAccepted = false;
+  private peerInitialized = false;
+  private iceGatheringComplete = false;
   // T9000 2026-07 firmware: the hub grants TURN (scall 100) then waits for the CLIENT
   // to send the SDP offer. When enabled we offer first and treat the hub reply as an answer.
   // Default is answerer (hub offers). Client-offer mode can ICE-connect then stall
@@ -107,6 +163,7 @@ export class RtcSession extends EventEmitter {
       this.signaling.sendInfoCandidate(candidate, 1);
     });
     this.peer.on("iceGatheringComplete", () => {
+      this.iceGatheringComplete = true;
       rootHTTPLogger.info("RtcSession ICE gathering complete — sending end-of-candidates");
       this.reportHandoffPhase("ice_gathering_complete");
       this.signaling.sendInfoEndOfCandidates(1);
@@ -184,6 +241,24 @@ export class RtcSession extends EventEmitter {
 
   public isCommandChannelReady(): boolean {
     return this.peer.isCommandChannelReady();
+  }
+
+  public getNegotiationDiagnostic(): RtcNegotiationDiagnostic {
+    const state = {
+      ...this.peer.getDiagnosticState(),
+      scallAccepted: this.scallAccepted,
+      peerInitialized: this.peerInitialized,
+      sdpHandled: this.sdpHandled,
+      iceGatheringComplete: this.iceGatheringComplete,
+    };
+    return {
+      stage: classifyRtcNegotiationStage(state),
+      ...state,
+    };
+  }
+
+  public createConnectTimeoutError(): RtcConnectTimeoutError {
+    return new RtcConnectTimeoutError(this.getNegotiationDiagnostic());
   }
 
   public sendCommand(data: Buffer): boolean {
@@ -297,6 +372,7 @@ export class RtcSession extends EventEmitter {
 
     if (status === 100 && payload.turn) {
       this.rtc408Retries = 0;
+      this.scallAccepted = true;
       this.turn = payload.turn;
       this.emit("turn", payload.turn);
       if (this.opts.turnHarvestOnly) {
@@ -313,6 +389,7 @@ export class RtcSession extends EventEmitter {
       }
       this.reportHandoffPhase("peer_init_start");
       await this.peer.initWithTurn(payload.turn, this.resolvePeerOptions());
+      this.peerInitialized = true;
       this.reportHandoffPhase("peer_init_complete");
       if (this.isOfferer && !this.clientOfferSent) {
         await this.sendClientOffer("initial");

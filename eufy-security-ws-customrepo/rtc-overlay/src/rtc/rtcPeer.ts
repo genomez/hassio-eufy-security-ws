@@ -41,6 +41,15 @@ export interface RtcPeerEvents {
   error: (err: Error) => void;
 }
 
+export interface RtcPeerDiagnosticState {
+  connectionState: string;
+  iceConnectionState: string;
+  iceGatheringState: string;
+  signalingState: string;
+  selectedPairPresent: boolean;
+  commandChannelOpen: boolean;
+}
+
 /** Matches security.eufy.com portal channel list (index 0 = command). */
 const DATA_CHANNEL_NAMES = ["WebrtcDataChannel", "audio", "idr", "video", "notify", "download"];
 
@@ -564,6 +573,28 @@ export class RtcPeerConnection extends EventEmitter {
   public isCommandChannelReady(): boolean {
     const dc = this.dataChannels.get("WebrtcDataChannel");
     return this.commandChannelOpen && !!dc?.isOpen();
+  }
+
+  /** Sanitized state only: never returns candidate addresses, ports, SDP, or TURN credentials. */
+  public getDiagnosticState(): RtcPeerDiagnosticState {
+    if (!this.pc) {
+      return {
+        connectionState: "not_initialized",
+        iceConnectionState: "not_initialized",
+        iceGatheringState: "not_initialized",
+        signalingState: "not_initialized",
+        selectedPairPresent: false,
+        commandChannelOpen: false,
+      };
+    }
+    return {
+      connectionState: String(this.pc.state()),
+      iceConnectionState: String(mapIceState(this.pc.iceState())),
+      iceGatheringState: String(this.pc.gatheringState()),
+      signalingState: String(this.pc.signalingState()),
+      selectedPairPresent: Boolean(this.pc.getSelectedCandidatePair()),
+      commandChannelOpen: this.isCommandChannelReady(),
+    };
   }
 
   public sendCommand(data: Buffer): boolean {

@@ -121,6 +121,10 @@ export RTC_CLIENT_OFFER="${RTC_CLIENT_OFFER:-0}"
 # If >0 and CLIENT_OFFER=0: send our SDP offer after this many ms waiting for hub offer.
 # Keep 0 for now — client-offer DTLS is unreliable on current T9000 firmware.
 export RTC_HUB_OFFER_WAIT_MS="${RTC_HUB_OFFER_WAIT_MS:-0}"
+# Test4 only: after a typed no-hub-offer timeout, run one guarded cloud inventory wake and
+# retry once in answerer mode. The client defaults this path off unless explicitly enabled.
+export RTC_NO_OFFER_CLOUD_WAKE_RETRY="${RTC_NO_OFFER_CLOUD_WAKE_RETRY:-1}"
+export RTC_NO_OFFER_WAKE_SETTLE_MS="${RTC_NO_OFFER_WAKE_SETTLE_MS:-2000}"
 # Send an explicit DTLS role in our offer (the hub can't negotiate from "actpass"): we are
 # active (DTLS client), so the hub must be passive (server). Answer role is coerced to match.
 export RTC_SIGNAL_SETUP="${RTC_SIGNAL_SETUP:-active}"

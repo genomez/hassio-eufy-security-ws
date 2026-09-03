@@ -6,5 +6,5 @@ codenotary:
   base_image: notary@home-assistant.io
 args:
   EUFY_SECURITY_WS_VERSION: 3.0.1
-  EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#regional-rtc-auth-recovery-test3"
-  EUFY_CLIENT_BUILD_ID: "regional-auth-test3-revoked-session-20260901a"
+  EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#regional-rtc-offer-wake-test4"
+  EUFY_CLIENT_BUILD_ID: "regional-offer-test4-cloud-wake-20260903a"
