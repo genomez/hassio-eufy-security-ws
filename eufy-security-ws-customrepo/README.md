@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-app-live-view-test5`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-stable-rc3-build`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -92,6 +92,15 @@ official-app live view, asks for that view to be closed, waits briefly, and
 makes exactly one answerer-mode RTC retry. A non-matching initial failure or a
 failed post-app retry stops without another automatic attempt. Closing the
 station cancels the observation timers.
+
+Version `3.0.18-regional-rtc-rc3` packages the proven regional RTC, guarded
+revoked-Mega-session recovery, and Test5 logic under one stable add-on identity.
+Guarded recovery is enabled by default and remains limited to the typed revoked-token
+condition while no T9000 RTC session is connected. The Test5 live-view experiment is
+dormant by default; set the add-on option `rtc_app_live_view_test` to `true` only for
+the single controlled run. While enabled, competing cloud and swipe/live wake paths
+are suppressed. Setting the option back to `false` restores normal RC3 reconnect and
+wake behavior without switching repositories or changing the add-on data directory.
 
 The diagnostic does not change regional endpoint selection, SCTP packet size,
 answerer/client-offer mode, proactive handoff timing, property refresh, or the

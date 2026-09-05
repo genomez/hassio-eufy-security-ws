@@ -121,19 +121,33 @@ export RTC_CLIENT_OFFER="${RTC_CLIENT_OFFER:-0}"
 # If >0 and CLIENT_OFFER=0: send our SDP offer after this many ms waiting for hub offer.
 # Keep 0 for now — client-offer DTLS is unreliable on current T9000 firmware.
 export RTC_HUB_OFFER_WAIT_MS="${RTC_HUB_OFFER_WAIT_MS:-0}"
-# Test5 only: after one typed no-hub-offer timeout, pause all RTC recovery, emit timed
-# official-app live-view action markers, then make exactly one answerer-mode retry.
-export RTC_APP_LIVE_VIEW_TEST="${RTC_APP_LIVE_VIEW_TEST:-1}"
+# RC3 keeps the Test5 behavior dormant unless the add-on option is explicitly enabled.
+# When enabled, one typed no-hub-offer timeout pauses all RTC recovery, emits timed
+# official-app live-view action markers, then makes exactly one answerer-mode retry.
+RTC_APP_LIVE_VIEW_TEST=0
+if bashio::config.true 'rtc_app_live_view_test'; then
+    RTC_APP_LIVE_VIEW_TEST=1
+fi
+export RTC_APP_LIVE_VIEW_TEST
 export RTC_APP_LIVE_VIEW_PREPARE_MS="${RTC_APP_LIVE_VIEW_PREPARE_MS:-60000}"
 export RTC_APP_LIVE_VIEW_ACTIVE_MS="${RTC_APP_LIVE_VIEW_ACTIVE_MS:-30000}"
 export RTC_APP_LIVE_VIEW_SETTLE_MS="${RTC_APP_LIVE_VIEW_SETTLE_MS:-15000}"
-# Disable Test4 and inherited automatic wake paths so they cannot contaminate the app test.
+# Test4 remains disabled. Suppress the inherited automatic wake paths only while the
+# explicit app-live-view diagnostic is enabled, so normal RC3 operation retains them.
 export RTC_NO_OFFER_CLOUD_WAKE_RETRY="${RTC_NO_OFFER_CLOUD_WAKE_RETRY:-0}"
-export RTC_CLOUD_WAKE_AFTER_FAILURES="${RTC_CLOUD_WAKE_AFTER_FAILURES:-999999}"
-export RTC_SWIPE_WAKE="${RTC_SWIPE_WAKE:-0}"
-export RTC_LIVE_WAKE="${RTC_LIVE_WAKE:-0}"
-# Test5 must never mutate Mega authentication or persisted session data.
-export RTC_MEGA_AUTH_RECOVERY_ENABLED="${RTC_MEGA_AUTH_RECOVERY_ENABLED:-0}"
+if [ "$RTC_APP_LIVE_VIEW_TEST" = "1" ]; then
+    export RTC_CLOUD_WAKE_AFTER_FAILURES=999999
+    export RTC_SWIPE_WAKE=0
+    export RTC_LIVE_WAKE=0
+    # The diagnostic must observe only the official-app action. A revoked token
+    # therefore fails closed instead of starting authentication recovery.
+    export RTC_MEGA_AUTH_RECOVERY_ENABLED=0
+else
+    # Guarded recovery acts only on the typed revoked-token condition while no RTC
+    # session is connected. The 24-hour cooldown, backup, single-flight lock, and
+    # interactive-login stop conditions remain enforced by the client.
+    export RTC_MEGA_AUTH_RECOVERY_ENABLED="${RTC_MEGA_AUTH_RECOVERY_ENABLED:-1}"
+fi
 # Send an explicit DTLS role in our offer (the hub can't negotiate from "actpass"): we are
 # active (DTLS client), so the hub must be passive (server). Answer role is coerced to match.
 export RTC_SIGNAL_SETUP="${RTC_SIGNAL_SETUP:-active}"
@@ -184,7 +198,7 @@ export RTC_LIVE_WAKE_DEVICE_SN="${RTC_LIVE_WAKE_DEVICE_SN:-}"
 export RTC_SWIPE_WAKE_CAMERA_TIMEOUT_MS="${RTC_SWIPE_WAKE_CAMERA_TIMEOUT_MS:-20000}"
 export RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS="${RTC_FLOODLIGHT_NOTIFY_ON_GRACE_MS:-45000}"
 export RTC_FLOODLIGHT_POLL_INTERVAL_MIN="${RTC_FLOODLIGHT_POLL_INTERVAL_MIN:-2}"
-bashio::log.info "RTC_ICE_POLICY=${RTC_ICE_POLICY} RTC_DELAY_SDP_UNTIL_GATHERING=${RTC_DELAY_SDP_UNTIL_GATHERING} RTC_POLL_MAX_MISSES=${RTC_POLL_MAX_MISSES} RTC_POLL_WATCHDOG_MS=${RTC_POLL_WATCHDOG_MS} RTC_PROPERTY_REFRESH_MS=${RTC_PROPERTY_REFRESH_MS} RTC_PROACTIVE_RECONNECT_MS=${RTC_PROACTIVE_RECONNECT_MS} RTC_HANDOFF=${RTC_HANDOFF} RTC_SCTP_MAX_PACKET_BYTES=${RTC_SCTP_MAX_PACKET_BYTES} RTC_APP_LIVE_VIEW_TEST=${RTC_APP_LIVE_VIEW_TEST} RTC_APP_LIVE_VIEW_PREPARE_MS=${RTC_APP_LIVE_VIEW_PREPARE_MS} RTC_APP_LIVE_VIEW_ACTIVE_MS=${RTC_APP_LIVE_VIEW_ACTIVE_MS} RTC_APP_LIVE_VIEW_SETTLE_MS=${RTC_APP_LIVE_VIEW_SETTLE_MS} RTC_NO_OFFER_CLOUD_WAKE_RETRY=${RTC_NO_OFFER_CLOUD_WAKE_RETRY} RTC_SWIPE_WAKE=${RTC_SWIPE_WAKE} RTC_SWIPE_WAKE_AFTER_FAILURES=${RTC_SWIPE_WAKE_AFTER_FAILURES} RTC_SWIPE_WAKE_CAMERA_FALLBACK=${RTC_SWIPE_WAKE_CAMERA_FALLBACK} RTC_TURN_BURST_MS=${RTC_TURN_BURST_MS} RTC_FLOODLIGHT_POLL_INTERVAL_MIN=${RTC_FLOODLIGHT_POLL_INTERVAL_MIN}"
+bashio::log.info "RTC_ICE_POLICY=${RTC_ICE_POLICY} RTC_DELAY_SDP_UNTIL_GATHERING=${RTC_DELAY_SDP_UNTIL_GATHERING} RTC_POLL_MAX_MISSES=${RTC_POLL_MAX_MISSES} RTC_POLL_WATCHDOG_MS=${RTC_POLL_WATCHDOG_MS} RTC_PROPERTY_REFRESH_MS=${RTC_PROPERTY_REFRESH_MS} RTC_PROACTIVE_RECONNECT_MS=${RTC_PROACTIVE_RECONNECT_MS} RTC_HANDOFF=${RTC_HANDOFF} RTC_SCTP_MAX_PACKET_BYTES=${RTC_SCTP_MAX_PACKET_BYTES} RTC_APP_LIVE_VIEW_TEST=${RTC_APP_LIVE_VIEW_TEST} RTC_APP_LIVE_VIEW_PREPARE_MS=${RTC_APP_LIVE_VIEW_PREPARE_MS} RTC_APP_LIVE_VIEW_ACTIVE_MS=${RTC_APP_LIVE_VIEW_ACTIVE_MS} RTC_APP_LIVE_VIEW_SETTLE_MS=${RTC_APP_LIVE_VIEW_SETTLE_MS} RTC_NO_OFFER_CLOUD_WAKE_RETRY=${RTC_NO_OFFER_CLOUD_WAKE_RETRY} RTC_MEGA_AUTH_RECOVERY_ENABLED=${RTC_MEGA_AUTH_RECOVERY_ENABLED} RTC_SWIPE_WAKE=${RTC_SWIPE_WAKE} RTC_SWIPE_WAKE_AFTER_FAILURES=${RTC_SWIPE_WAKE_AFTER_FAILURES} RTC_SWIPE_WAKE_CAMERA_FALLBACK=${RTC_SWIPE_WAKE_CAMERA_FALLBACK} RTC_TURN_BURST_MS=${RTC_TURN_BURST_MS} RTC_FLOODLIGHT_POLL_INTERVAL_MIN=${RTC_FLOODLIGHT_POLL_INTERVAL_MIN}"
 
 JSON_STRING="$( jq -n \
   --arg username "$USERNAME" \

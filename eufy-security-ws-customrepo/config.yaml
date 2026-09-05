@@ -1,6 +1,6 @@
-name: eufy-security-ws regional app live-view diagnostic
-description: Isolated T9000 missing-offer test with one timed official-app live-view observation
-version: 3.0.18-regional-app-live-test5
+name: eufy-security-ws regional RTC RC3
+description: Regional T9000 RTC candidate with guarded Mega recovery and an opt-in live-view diagnostic
+version: 3.0.18-regional-rtc-rc3
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false
@@ -24,6 +24,7 @@ options:
   accept_invitations: true
   debug: false
   ipv4first: false
+  rtc_app_live_view_test: false
   event_duration: 10
   stations: []
 schema:
@@ -35,6 +36,7 @@ schema:
   accept_invitations: bool
   debug: bool
   ipv4first: bool
+  rtc_app_live_view_test: bool
   event_duration: int(1,3600)?
   trusted_device_name: str?
   stations:
