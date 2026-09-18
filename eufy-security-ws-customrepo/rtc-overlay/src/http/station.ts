@@ -2672,11 +2672,49 @@ export class Station extends TypedEmitter<StationEvents> {
     }
   }
 
+  private getRtcHandoffRetryBudget(delayMs = 0): {
+    canRetry: boolean;
+    primarySessionAgeMs?: number;
+    safeSessionAgeMs: number;
+    remainingSafeMs: number;
+    retryTimeoutMs: number;
+    delayMs: number;
+  } {
+    const configuredSafeSessionAgeMs = Number(process.env.RTC_HANDOFF_SAFE_SESSION_MS ?? 335_000);
+    const safeSessionAgeMs = Number.isFinite(configuredSafeSessionAgeMs)
+      ? Math.max(60_000, Math.floor(configuredSafeSessionAgeMs))
+      : 335_000;
+    const configuredConnectTimeoutMs = Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? 45_000);
+    const connectTimeoutMs = Number.isFinite(configuredConnectTimeoutMs)
+      ? Math.max(10_000, Math.floor(configuredConnectTimeoutMs))
+      : 45_000;
+    const configuredMinRetryMs = Number(process.env.RTC_HANDOFF_MIN_RETRY_MS ?? 5_000);
+    const minRetryMs = Number.isFinite(configuredMinRetryMs)
+      ? Math.max(1_000, Math.floor(configuredMinRetryMs))
+      : 5_000;
+    const boundedDelayMs = Math.max(0, Math.floor(delayMs));
+    const primarySessionAgeMs = this.rtcConnectedAt ? Math.max(0, Date.now() - this.rtcConnectedAt) : undefined;
+    const remainingSafeMs =
+      primarySessionAgeMs === undefined ? 0 : Math.max(0, safeSessionAgeMs - primarySessionAgeMs - boundedDelayMs);
+    const retryTimeoutMs = Math.min(connectTimeoutMs, remainingSafeMs);
+
+    return {
+      canRetry: retryTimeoutMs >= minRetryMs,
+      primarySessionAgeMs,
+      safeSessionAgeMs,
+      remainingSafeMs,
+      retryTimeoutMs,
+      delayMs: boundedDelayMs,
+    };
+  }
+
   private hardReconnectAfterRtcHandoffFailure(reason: string, attempt: number): void {
+    const budget = this.getRtcHandoffRetryBudget();
     rootHTTPLogger.warn("T9000 RTC handoff recovery falling back to hard reconnect", {
       stationSN: this.getSerial(),
       reason,
       attempt,
+      ...budget,
     });
     this.rtcPollMisses = 0;
     this.clearRtcPollWatchdog();
@@ -2702,6 +2740,7 @@ export class Station extends TypedEmitter<StationEvents> {
       stationSN: this.getSerial(),
       attempt,
       probeMs,
+      ...this.getRtcHandoffRetryBudget(probeMs),
     });
     try {
       this.databaseQueryLatestInfo();
@@ -2741,23 +2780,61 @@ export class Station extends TypedEmitter<StationEvents> {
     const configuredBackoffMs = Number(process.env.RTC_HANDOFF_BACKOFF_MS ?? 30_000);
     const backoffMs = Number.isFinite(configuredBackoffMs) ? Math.max(5_000, Math.floor(configuredBackoffMs)) : 30_000;
     const useBackoff = attempt >= maxRetries;
+    const currentBudget = this.getRtcHandoffRetryBudget();
 
     rootHTTPLogger.warn("T9000 RTC proactive handoff failed — retaining existing session and probing before retry", {
       stationSN: this.getSerial(),
       attempt,
       maxRetries,
       backoffMs: useBackoff ? backoffMs : 0,
+      ...currentBudget,
     });
+
+    if (!currentBudget.canRetry) {
+      rootHTTPLogger.warn("T9000 RTC retained-session probe skipped — safe retry deadline reached", {
+        stationSN: this.getSerial(),
+        attempt,
+        ...currentBudget,
+      });
+      this.hardReconnectAfterRtcHandoffFailure("safe_deadline_reached", attempt + 1);
+      return;
+    }
 
     this.probeExistingRtcCommandPathForHandoff(attempt, (probeAckMs) => {
       const nextAttempt = attempt + 1;
       if (!useBackoff) {
+        const budget = this.getRtcHandoffRetryBudget();
+        if (!budget.canRetry) {
+          rootHTTPLogger.warn("T9000 RTC handoff retry skipped — retained session is near safe deadline", {
+            stationSN: this.getSerial(),
+            attempt: nextAttempt,
+            probeAckMs,
+            ...budget,
+          });
+          this.hardReconnectAfterRtcHandoffFailure("retry_budget_exhausted", nextAttempt);
+          return;
+        }
         rootHTTPLogger.info("T9000 RTC handoff recovery probe ok — retrying replacement without disconnect", {
           stationSN: this.getSerial(),
           attempt: nextAttempt,
           probeAckMs,
+          ...budget,
         });
-        this.attemptProactiveRtcHandoff(nextAttempt);
+        this.attemptProactiveRtcHandoff(nextAttempt, budget.retryTimeoutMs);
+        return;
+      }
+
+      const backoffBudget = this.getRtcHandoffRetryBudget(backoffMs);
+      if (!backoffBudget.canRetry) {
+        rootHTTPLogger.warn("T9000 RTC handoff backoff skipped — retained session would cross safe deadline", {
+          stationSN: this.getSerial(),
+          attempt,
+          nextAttempt,
+          probeAckMs,
+          backoffMs,
+          ...backoffBudget,
+        });
+        this.hardReconnectAfterRtcHandoffFailure("backoff_budget_exhausted", nextAttempt);
         return;
       }
 
@@ -2767,6 +2844,7 @@ export class Station extends TypedEmitter<StationEvents> {
         nextAttempt,
         probeAckMs,
         backoffMs,
+        ...backoffBudget,
       });
       this.clearProactiveRtcReconnect();
       this.rtcProactiveReconnectTimer = setTimeout(() => {
@@ -2775,13 +2853,25 @@ export class Station extends TypedEmitter<StationEvents> {
           return;
         }
         this.probeExistingRtcCommandPathForHandoff(attempt, (freshProbeAckMs) => {
+          const retryBudget = this.getRtcHandoffRetryBudget();
+          if (!retryBudget.canRetry) {
+            rootHTTPLogger.warn("T9000 RTC post-backoff retry skipped — retained session is near safe deadline", {
+              stationSN: this.getSerial(),
+              attempt: nextAttempt,
+              probeAckMs: freshProbeAckMs,
+              ...retryBudget,
+            });
+            this.hardReconnectAfterRtcHandoffFailure("post_backoff_retry_budget_exhausted", nextAttempt);
+            return;
+          }
           rootHTTPLogger.info("T9000 RTC retained command path still healthy — retrying replacement after backoff", {
             stationSN: this.getSerial(),
             attempt: nextAttempt,
             probeAckMs: freshProbeAckMs,
             backoffMs,
+            ...retryBudget,
           });
-          this.attemptProactiveRtcHandoff(nextAttempt);
+          this.attemptProactiveRtcHandoff(nextAttempt, retryBudget.retryTimeoutMs);
         });
       }, backoffMs);
     });
@@ -2799,14 +2889,14 @@ export class Station extends TypedEmitter<StationEvents> {
     );
   }
 
-  private attemptProactiveRtcHandoff(attempt: number): void {
+  private attemptProactiveRtcHandoff(attempt: number, timeoutMs?: number): void {
     const transport = this.rtcTransport;
     if (!transport?.isConnected() || this.terminating) {
       return;
     }
     const connectionGeneration = this.rtcConnectionGeneration;
     void transport
-      .handoffConnect()
+      .handoffConnect(timeoutMs)
       .then((ok) => {
         if (this.terminating) {
           return;
@@ -2817,6 +2907,7 @@ export class Station extends TypedEmitter<StationEvents> {
           rootHTTPLogger.info("T9000 RTC proactive handoff ok — session refreshed without disconnect", {
             stationSN: this.getSerial(),
             attempt,
+            timeoutMs,
           });
           return;
         }

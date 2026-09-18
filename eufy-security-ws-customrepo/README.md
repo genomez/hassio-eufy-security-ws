@@ -37,3 +37,10 @@ the established answerer mode, 800-byte SCTP packet size, and handoff timing.
 Version `3.0.18-wake-v7` retries Mega push registration once when the cached
 identity or signature is rejected, then persists the refreshed Mega session
 after success. Mega account identifiers are also removed from client logs.
+
+Version `3.0.18-wake-v9` bounds replacement-session retries by the retained
+RTC session's safe lifetime. If a full replacement attempt consumes most of
+that lifetime, the next retry is shortened or skipped so hard reconnect can
+start before the HomeBase command path's observed silence cliff. The existing
+answerer mode, 800-byte SCTP packet size, 270-second proactive handoff, and
+15-minute property refresh defaults remain unchanged.
