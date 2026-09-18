@@ -6,5 +6,5 @@ codenotary:
   base_image: notary@home-assistant.io
 args:
   EUFY_SECURITY_WS_VERSION: 3.0.1
-  EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#regional-rtc-unified-v1"
-  EUFY_CLIENT_BUILD_ID: "regional-rtc-rc4-unified-20260918a"
+  RC4_EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#regional-rtc-unified-v1"
+  RC4_EUFY_CLIENT_BUILD_ID: "regional-rtc-rc4-unified-20260918b"
