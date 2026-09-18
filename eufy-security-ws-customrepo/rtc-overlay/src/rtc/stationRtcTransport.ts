@@ -312,7 +312,7 @@ export class StationRtcTransport extends EventEmitter {
    * hub's ~337s command-path cliff forces a refresh. Returns false if handoff fails (caller
    * may fall back to hard close).
    */
-  public async handoffConnect(externalSignal?: AbortSignal): Promise<boolean> {
+  public async handoffConnect(externalSignal?: AbortSignal, timeoutMs = this.connectTimeoutMs): Promise<boolean> {
     if (!this.credentials.authToken || !this.credentials.userId) {
       return false;
     }
@@ -342,11 +342,14 @@ export class StationRtcTransport extends EventEmitter {
     const heartbeatIntervalMs = 5_000;
     let nextHeartbeatAt = monotonicStartedAt + heartbeatIntervalMs;
     let heartbeatTimer: NodeJS.Timeout | undefined;
+    const boundedTimeoutMs = Number.isFinite(timeoutMs)
+      ? Math.max(1_000, Math.min(this.connectTimeoutMs, Math.floor(timeoutMs)))
+      : this.connectTimeoutMs;
 
     rootHTTPLogger.info("StationRtcTransport handoff starting — second session while first stays up", {
       stationSn: this.stationSn,
       handoffId,
-      timeoutMs: this.connectTimeoutMs,
+      timeoutMs: boundedTimeoutMs,
     });
 
     const reportPhase = (phase: string, details: Record<string, unknown> = {}): void => {
@@ -391,7 +394,7 @@ export class StationRtcTransport extends EventEmitter {
 
       await runWithHandoffTerminalTimeout(
         () => connectAndWaitForRtcSession(newSession as RtcSession, 0, reportPhase),
-        this.connectTimeoutMs,
+        boundedTimeoutMs,
         () => closeReplacement("replacement_timeout_close"),
         reportPhase,
         externalSignal

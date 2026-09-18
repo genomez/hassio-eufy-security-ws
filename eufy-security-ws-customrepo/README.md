@@ -110,4 +110,12 @@ Version `3.0.18-regional-rtc-rc4` retains all RC3 regional and guarded-recovery
 behavior and adds the later production reliability protections. It retries
 Mega push registration once when the cached
 identity or signature is rejected, then persists the refreshed Mega session
-after success. Mega account identifiers are also removed from client logs.
+after success. Mega account identifiers are also removed from client logs. A
+handoff generation guard prevents a late failed replacement from overwriting a
+newer healthy primary session. Replacement retries are bounded by the retained
+RTC session's safe lifetime; if a full attempt consumes most of that lifetime,
+the next retry is shortened or skipped so hard reconnect can start before the
+HomeBase command path's observed silence cliff. The existing answerer mode,
+800-byte SCTP packet size, 270-second proactive handoff, and 15-minute property
+refresh defaults remain unchanged. The Test5 app-live experiment remains
+dormant unless explicitly enabled.
