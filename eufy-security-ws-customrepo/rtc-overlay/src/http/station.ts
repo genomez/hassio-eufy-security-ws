@@ -3244,7 +3244,7 @@ export class Station extends TypedEmitter<StationEvents> {
         this.rtcTransport.close();
         return;
       }
-      this.attemptProactiveRtcHandoff(0);
+      this.attemptProactiveRtcHandoff(0, this.getRtcHandoffConnectTimeoutMs());
     }, afterMs);
   }
 

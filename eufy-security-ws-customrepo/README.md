@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-handoff-timeout-v1`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-initial-timeout-v1`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -125,3 +125,9 @@ Proactive replacement handoffs use a separate 15-second timeout so a silent
 replacement cannot consume most of the retained session's safe lifetime before
 the guarded retry path runs. The Test5 app-live experiment
 remains dormant unless explicitly enabled.
+
+Version `3.0.18-regional-rtc-rc8` retains RC7 behavior and fixes the initial
+scheduled proactive replacement handoff so it receives the dedicated 15-second
+handoff timeout. RC7 applied that timeout to retries but allowed the first
+replacement to fall back to the normal 45-second connection timeout. Normal RTC
+startup remains at 45 seconds; this change affects only proactive handoffs.
