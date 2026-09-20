@@ -4,7 +4,7 @@
 
 Home Assistant add-on that builds **eufy-security-ws 3.0.1** (bropat) with:
 
-- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-retained-deferral-v1`)
+- Custom **eufy-security-client** from GitHub (`genomez/eufy-security-client#regional-rtc-health-bounded-handoff-v1`)
 - Automatic **eufy_mega v6** login (mega-login patch)
 - Persistent T9000 Mega/WebRTC command transport with make-before-break handoff
 - Hub-authoritative property/FLC synchronization and guarded RTC recovery
@@ -106,7 +106,7 @@ The diagnostic does not change regional endpoint selection, SCTP packet size,
 answerer/client-offer mode, proactive handoff timing, property refresh, or the
 existing Mega login lockout behavior.
 
-Version `3.0.18-regional-rtc-rc5` retains all RC4 regional and guarded-recovery
+Version `3.0.18-regional-rtc-rc6` retains all RC5 regional and guarded-recovery
 behavior and adds the later production reliability protections. It retries
 Mega push registration once when the cached
 identity or signature is rejected, then persists the refreshed Mega session
@@ -114,10 +114,11 @@ after success. Mega account identifiers are also removed from client logs. A
 handoff generation guard prevents a late failed replacement from overwriting a
 newer healthy primary session. Replacement retries are bounded by the retained
 RTC session's safe lifetime; if a full attempt consumes most of that lifetime,
-the next retry is shortened. At the safe deadline, RC5 probes the retained
-command path and permits one additional full replacement attempt only after a
-fresh acknowledgement. A failed probe, lost peer, or failure after that one
-deferral retains the bounded hard-reconnect fallback. The existing answerer
+the next retry is shortened. At the safe deadline, RC6 probes the retained
+command path before every additional full replacement attempt. A fresh
+acknowledgement keeps the working session in place while replacement attempts
+continue at the bounded probe-plus-connect cadence. A failed probe or lost peer
+retains the hard-reconnect fallback. The existing answerer
 mode, 800-byte SCTP packet size, 270-second proactive handoff, and 15-minute
 property refresh defaults remain unchanged. The Test5 app-live experiment
 remains dormant unless explicitly enabled.

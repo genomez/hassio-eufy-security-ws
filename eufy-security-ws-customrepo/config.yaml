@@ -1,6 +1,6 @@
-name: eufy-security-ws regional RTC RC5
-description: Unified regional T9000 RTC build with guarded Mega recovery and healthy retained-session deferral
-version: 3.0.18-regional-rtc-rc5
+name: eufy-security-ws regional RTC RC6
+description: Unified regional T9000 RTC build with guarded Mega recovery and health-bounded handoff retries
+version: 3.0.18-regional-rtc-rc6
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false

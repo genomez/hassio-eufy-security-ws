@@ -6,5 +6,5 @@ codenotary:
   base_image: notary@home-assistant.io
 args:
   EUFY_SECURITY_WS_VERSION: 3.0.1
-  RC5_EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#regional-rtc-retained-deferral-v1"
-  RC5_EUFY_CLIENT_BUILD_ID: "regional-rtc-rc5-retained-deferral-20260920a"
+  RC6_EUFY_SECURITY_CLIENT_GIT: "github:genomez/eufy-security-client#regional-rtc-health-bounded-handoff-v1"
+  RC6_EUFY_CLIENT_BUILD_ID: "regional-rtc-rc6-health-bounded-handoff-20260920a"
