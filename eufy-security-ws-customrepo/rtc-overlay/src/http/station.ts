@@ -2996,7 +2996,9 @@ export class Station extends TypedEmitter<StationEvents> {
     }
 
     this.clearProactiveRtcReconnect();
-    this.rtcProactiveReconnectTimer = setTimeout(() => {
+    const probeDeadlineAt = probeSentAt + probeMs;
+    const probeCheckMs = 100;
+    const checkProbe = (): void => {
       this.rtcProactiveReconnectTimer = undefined;
       if (this.terminating) {
         return;
@@ -3004,15 +3006,23 @@ export class Station extends TypedEmitter<StationEvents> {
       const commandChannelReady =
         this.rtcTransport?.isConnected() === true && this.rtcTransport.isCommandChannelReady();
       const probeConfirmed = this.rtcLastDbPollAckAt >= probeSentAt;
-      if (!commandChannelReady || !probeConfirmed) {
+      if (commandChannelReady && probeConfirmed) {
+        onConfirmed(this.rtcLastDbPollAckAt - probeSentAt);
+        return;
+      }
+
+      const remainingMs = probeDeadlineAt - Date.now();
+      if (remainingMs <= 0) {
         this.hardReconnectAfterRtcHandoffFailure(
           probeConfirmed ? "existing_command_channel_closed" : "command_probe_timeout",
           attempt
         );
         return;
       }
-      onConfirmed(this.rtcLastDbPollAckAt - probeSentAt);
-    }, probeMs);
+
+      this.rtcProactiveReconnectTimer = setTimeout(checkProbe, Math.min(probeCheckMs, remainingMs));
+    };
+    this.rtcProactiveReconnectTimer = setTimeout(checkProbe, Math.min(probeCheckMs, probeMs));
   }
 
   private handleFailedProactiveRtcHandoff(attempt: number): void {

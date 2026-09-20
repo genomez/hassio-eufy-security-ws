@@ -1,6 +1,6 @@
-name: eufy-security-ws regional RTC RC8
-description: Unified regional T9000 RTC build with guarded Mega recovery and initial handoff timeout wiring
-version: 3.0.18-regional-rtc-rc8
+name: eufy-security-ws regional RTC RC9
+description: Unified regional T9000 RTC build with guarded Mega recovery and early retained-probe acknowledgement
+version: 3.0.18-regional-rtc-rc9
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false
