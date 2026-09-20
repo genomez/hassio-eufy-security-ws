@@ -2922,10 +2922,10 @@ export class Station extends TypedEmitter<StationEvents> {
   }
 
   private getRtcHandoffConnectTimeoutMs(): number {
-    const configuredConnectTimeoutMs = Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? 45_000);
+    const configuredConnectTimeoutMs = Number(process.env.RTC_HANDOFF_CONNECT_TIMEOUT_MS ?? 15_000);
     return Number.isFinite(configuredConnectTimeoutMs)
       ? Math.max(10_000, Math.floor(configuredConnectTimeoutMs))
-      : 45_000;
+      : 15_000;
   }
 
   private retryRtcHandoffAfterHealthyDeadlineProbe(
