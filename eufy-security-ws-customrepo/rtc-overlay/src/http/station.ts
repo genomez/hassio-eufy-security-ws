@@ -2847,7 +2847,8 @@ export class Station extends TypedEmitter<StationEvents> {
    * Prefer make-before-break handoff (RTC_HANDOFF=1, default) so HA stays connected while a
    * second session comes up. If the replacement is rejected, keep the old session while its
    * command path answers probes and retry the replacement with backoff. Hard-close only when
-   * the retained command path is no longer healthy.
+   * the retained command path is no longer healthy or one bounded, freshly probed deferral has
+   * also failed.
    * Set RTC_PROACTIVE_RECONNECT_MS=0 to disable.
    */
   private clearProactiveRtcReconnect(): void {
@@ -2899,10 +2900,7 @@ export class Station extends TypedEmitter<StationEvents> {
     const safeSessionAgeMs = Number.isFinite(configuredSafeSessionAgeMs)
       ? Math.max(60_000, Math.floor(configuredSafeSessionAgeMs))
       : 335_000;
-    const configuredConnectTimeoutMs = Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? 45_000);
-    const connectTimeoutMs = Number.isFinite(configuredConnectTimeoutMs)
-      ? Math.max(10_000, Math.floor(configuredConnectTimeoutMs))
-      : 45_000;
+    const connectTimeoutMs = this.getRtcHandoffConnectTimeoutMs();
     const configuredMinRetryMs = Number(process.env.RTC_HANDOFF_MIN_RETRY_MS ?? 5_000);
     const minRetryMs = Number.isFinite(configuredMinRetryMs)
       ? Math.max(1_000, Math.floor(configuredMinRetryMs))
@@ -2921,6 +2919,59 @@ export class Station extends TypedEmitter<StationEvents> {
       retryTimeoutMs,
       delayMs: boundedDelayMs,
     };
+  }
+
+  private getRtcHandoffConnectTimeoutMs(): number {
+    const configuredConnectTimeoutMs = Number(process.env.RTC_CONNECT_TIMEOUT_MS ?? 45_000);
+    return Number.isFinite(configuredConnectTimeoutMs)
+      ? Math.max(10_000, Math.floor(configuredConnectTimeoutMs))
+      : 45_000;
+  }
+
+  private getRtcHandoffHealthyDeferralBudget(healthyDeferralsUsed: number): {
+    canDefer: boolean;
+    healthyDeferralsUsed: number;
+    maxHealthyDeferrals: number;
+    deferredRetryTimeoutMs: number;
+  } {
+    const configuredMaxHealthyDeferrals = Number(process.env.RTC_HANDOFF_MAX_HEALTHY_DEFERRALS ?? 1);
+    const maxHealthyDeferrals = Number.isFinite(configuredMaxHealthyDeferrals)
+      ? Math.max(0, Math.floor(configuredMaxHealthyDeferrals))
+      : 1;
+    const boundedHealthyDeferralsUsed = Math.max(0, Math.floor(healthyDeferralsUsed));
+    return {
+      canDefer: boundedHealthyDeferralsUsed < maxHealthyDeferrals,
+      healthyDeferralsUsed: boundedHealthyDeferralsUsed,
+      maxHealthyDeferrals,
+      deferredRetryTimeoutMs: this.getRtcHandoffConnectTimeoutMs(),
+    };
+  }
+
+  private retryRtcHandoffAfterHealthyDeadlineProbe(
+    attempt: number,
+    healthyDeferralsUsed: number,
+    probeAckMs: number,
+    reason: string
+  ): boolean {
+    const deferral = this.getRtcHandoffHealthyDeferralBudget(healthyDeferralsUsed);
+    if (!deferral.canDefer) {
+      return false;
+    }
+
+    const nextAttempt = attempt + 1;
+    rootHTTPLogger.warn(
+      "T9000 RTC safe deadline reached but retained command path is healthy — allowing one bounded replacement deferral",
+      {
+        stationSN: this.getSerial(),
+        reason,
+        attempt: nextAttempt,
+        probeAckMs,
+        ...deferral,
+        ...this.getRtcHandoffRetryBudget(),
+      }
+    );
+    this.attemptProactiveRtcHandoff(nextAttempt, deferral.deferredRetryTimeoutMs, deferral.healthyDeferralsUsed + 1);
+    return true;
   }
 
   private hardReconnectAfterRtcHandoffFailure(reason: string, attempt: number): void {
@@ -2990,7 +3041,7 @@ export class Station extends TypedEmitter<StationEvents> {
     }, probeMs);
   }
 
-  private handleFailedProactiveRtcHandoff(attempt: number): void {
+  private handleFailedProactiveRtcHandoff(attempt: number, healthyDeferralsUsed = 0): void {
     const configuredMaxRetries = Number(process.env.RTC_HANDOFF_MAX_RETRIES ?? 1);
     const maxRetries = Number.isFinite(configuredMaxRetries) ? Math.max(0, Math.floor(configuredMaxRetries)) : 1;
     const configuredBackoffMs = Number(process.env.RTC_HANDOFF_BACKOFF_MS ?? 30_000);
@@ -3007,12 +3058,36 @@ export class Station extends TypedEmitter<StationEvents> {
     });
 
     if (!currentBudget.canRetry) {
-      rootHTTPLogger.warn("T9000 RTC retained-session probe skipped — safe retry deadline reached", {
+      const deferral = this.getRtcHandoffHealthyDeferralBudget(healthyDeferralsUsed);
+      if (!deferral.canDefer) {
+        rootHTTPLogger.warn("T9000 RTC healthy retained-session deferral exhausted", {
+          stationSN: this.getSerial(),
+          attempt,
+          ...deferral,
+          ...currentBudget,
+        });
+        this.hardReconnectAfterRtcHandoffFailure("healthy_deferral_exhausted", attempt + 1);
+        return;
+      }
+
+      rootHTTPLogger.warn("T9000 RTC safe retry deadline reached — probing before bounded deferral", {
         stationSN: this.getSerial(),
         attempt,
+        ...deferral,
         ...currentBudget,
       });
-      this.hardReconnectAfterRtcHandoffFailure("safe_deadline_reached", attempt + 1);
+      this.probeExistingRtcCommandPathForHandoff(attempt, (probeAckMs) => {
+        if (
+          !this.retryRtcHandoffAfterHealthyDeadlineProbe(
+            attempt,
+            healthyDeferralsUsed,
+            probeAckMs,
+            "safe_deadline_reached"
+          )
+        ) {
+          this.hardReconnectAfterRtcHandoffFailure("healthy_deferral_exhausted", attempt + 1);
+        }
+      });
       return;
     }
 
@@ -3027,7 +3102,16 @@ export class Station extends TypedEmitter<StationEvents> {
             probeAckMs,
             ...budget,
           });
-          this.hardReconnectAfterRtcHandoffFailure("retry_budget_exhausted", nextAttempt);
+          if (
+            !this.retryRtcHandoffAfterHealthyDeadlineProbe(
+              attempt,
+              healthyDeferralsUsed,
+              probeAckMs,
+              "retry_budget_exhausted"
+            )
+          ) {
+            this.hardReconnectAfterRtcHandoffFailure("healthy_deferral_exhausted", nextAttempt);
+          }
           return;
         }
         rootHTTPLogger.info("T9000 RTC handoff recovery probe ok — retrying replacement without disconnect", {
@@ -3036,7 +3120,7 @@ export class Station extends TypedEmitter<StationEvents> {
           probeAckMs,
           ...budget,
         });
-        this.attemptProactiveRtcHandoff(nextAttempt, budget.retryTimeoutMs);
+        this.attemptProactiveRtcHandoff(nextAttempt, budget.retryTimeoutMs, healthyDeferralsUsed);
         return;
       }
 
@@ -3050,7 +3134,16 @@ export class Station extends TypedEmitter<StationEvents> {
           backoffMs,
           ...backoffBudget,
         });
-        this.hardReconnectAfterRtcHandoffFailure("backoff_budget_exhausted", nextAttempt);
+        if (
+          !this.retryRtcHandoffAfterHealthyDeadlineProbe(
+            attempt,
+            healthyDeferralsUsed,
+            probeAckMs,
+            "backoff_budget_exhausted"
+          )
+        ) {
+          this.hardReconnectAfterRtcHandoffFailure("healthy_deferral_exhausted", nextAttempt);
+        }
         return;
       }
 
@@ -3077,7 +3170,16 @@ export class Station extends TypedEmitter<StationEvents> {
               probeAckMs: freshProbeAckMs,
               ...retryBudget,
             });
-            this.hardReconnectAfterRtcHandoffFailure("post_backoff_retry_budget_exhausted", nextAttempt);
+            if (
+              !this.retryRtcHandoffAfterHealthyDeadlineProbe(
+                attempt,
+                healthyDeferralsUsed,
+                freshProbeAckMs,
+                "post_backoff_retry_budget_exhausted"
+              )
+            ) {
+              this.hardReconnectAfterRtcHandoffFailure("healthy_deferral_exhausted", nextAttempt);
+            }
             return;
           }
           rootHTTPLogger.info("T9000 RTC retained command path still healthy — retrying replacement after backoff", {
@@ -3087,16 +3189,13 @@ export class Station extends TypedEmitter<StationEvents> {
             backoffMs,
             ...retryBudget,
           });
-          this.attemptProactiveRtcHandoff(nextAttempt, retryBudget.retryTimeoutMs);
+          this.attemptProactiveRtcHandoff(nextAttempt, retryBudget.retryTimeoutMs, healthyDeferralsUsed);
         });
       }, backoffMs);
     });
   }
 
-  private isRtcHandoffFailureSuperseded(
-    transport: StationRtcTransport,
-    connectionGeneration: number
-  ): boolean {
+  private isRtcHandoffFailureSuperseded(transport: StationRtcTransport, connectionGeneration: number): boolean {
     return (
       this.rtcConnectionGeneration !== connectionGeneration &&
       this.rtcTransport === transport &&
@@ -3105,7 +3204,7 @@ export class Station extends TypedEmitter<StationEvents> {
     );
   }
 
-  private attemptProactiveRtcHandoff(attempt: number, timeoutMs?: number): void {
+  private attemptProactiveRtcHandoff(attempt: number, timeoutMs?: number, healthyDeferralsUsed = 0): void {
     const transport = this.rtcTransport;
     if (!transport?.isConnected() || this.terminating) {
       return;
@@ -3160,7 +3259,7 @@ export class Station extends TypedEmitter<StationEvents> {
           this.scheduleProactiveRtcReconnect();
           return;
         }
-        this.handleFailedProactiveRtcHandoff(attempt);
+        this.handleFailedProactiveRtcHandoff(attempt, healthyDeferralsUsed);
       } catch (err) {
         if (this.terminating) {
           return;
@@ -3181,7 +3280,7 @@ export class Station extends TypedEmitter<StationEvents> {
           attempt,
           error: getError(error),
         });
-        this.handleFailedProactiveRtcHandoff(attempt);
+        this.handleFailedProactiveRtcHandoff(attempt, healthyDeferralsUsed);
       } finally {
         this.releaseRtcHandoffDeadline(abortController);
       }

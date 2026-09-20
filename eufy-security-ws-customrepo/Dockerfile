@@ -3,9 +3,9 @@
 FROM ghcr.io/home-assistant/amd64-base:3.23
 
 ARG EUFY_SECURITY_WS_VERSION=3.0.1
-ARG RC4_EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#regional-rtc-unified-v1
-# Bump when RC4_EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
-ARG RC4_EUFY_CLIENT_BUILD_ID=regional-rtc-rc4-unified-20260918b
+ARG RC5_EUFY_SECURITY_CLIENT_GIT=github:genomez/eufy-security-client#regional-rtc-retained-deferral-v1
+# Bump when RC5_EUFY_SECURITY_CLIENT_GIT changes to invalidate Docker layer cache.
+ARG RC5_EUFY_CLIENT_BUILD_ID=regional-rtc-rc5-retained-deferral-20260920a
 
 COPY rtc-overlay /tmp/rtc-overlay
 
@@ -14,16 +14,16 @@ COPY eufy-security-ws-mega-login.patch /tmp/
 
 RUN \
     set -x \
-    && echo "RC4_EUFY_CLIENT_BUILD_ID=$RC4_EUFY_CLIENT_BUILD_ID" \
+    && echo "RC5_EUFY_CLIENT_BUILD_ID=$RC5_EUFY_CLIENT_BUILD_ID" \
     && apk add --no-cache jq nodejs npm patch git bash \
     && case "$(node --version)" in v24.*) ;; *) echo "Expected Node 24, got $(node --version)" >&2; exit 1 ;; esac \
-    && if [ -n "$RC4_EUFY_SECURITY_CLIENT_GIT" ]; then \
-         echo "FORCE: Using Custom Git URL for client: $RC4_EUFY_SECURITY_CLIENT_GIT" \
+    && if [ -n "$RC5_EUFY_SECURITY_CLIENT_GIT" ]; then \
+         echo "FORCE: Using Custom Git URL for client: $RC5_EUFY_SECURITY_CLIENT_GIT" \
          && npm init -y \
          && npm pkg set name="hassio-eufy-security-ws" \
          && npm pkg set private=true \
          && npm pkg set dependencies.eufy-security-ws="$EUFY_SECURITY_WS_VERSION" \
-         && npm pkg set overrides.eufy-security-client="$RC4_EUFY_SECURITY_CLIENT_GIT" \
+         && npm pkg set overrides.eufy-security-client="$RC5_EUFY_SECURITY_CLIENT_GIT" \
          && npm install --force \
          && if [ -d /usr/src/app/node_modules/eufy-security-client ]; then \
               CLIENT_DIR=/usr/src/app/node_modules/eufy-security-client; \
@@ -32,10 +32,10 @@ RUN \
             else \
               echo "eufy-security-client not found after npm install" >&2; exit 1; \
             fi \
-         && echo "Building custom client from $RC4_EUFY_SECURITY_CLIENT_GIT into $CLIENT_DIR" \
-         && REPO="${RC4_EUFY_SECURITY_CLIENT_GIT#github:}" \
+         && echo "Building custom client from $RC5_EUFY_SECURITY_CLIENT_GIT into $CLIENT_DIR" \
+         && REPO="${RC5_EUFY_SECURITY_CLIENT_GIT#github:}" \
          && REPO="${REPO%%#*}" \
-         && BRANCH="${RC4_EUFY_SECURITY_CLIENT_GIT#*#}" \
+         && BRANCH="${RC5_EUFY_SECURITY_CLIENT_GIT#*#}" \
          && BRANCH="${BRANCH:-main}" \
          && rm -rf /tmp/eufy-security-client \
          && git clone --depth 1 --branch "$BRANCH" "https://github.com/${REPO}.git" /tmp/eufy-security-client \
