@@ -20,6 +20,7 @@ The September 25 read-only audit confirmed the live client checkout at the commi
 - Approximately five days of US-account production use, not five uninterrupted days of uptime. Real outages and phone-assisted recovery occurred; RC9 has not eliminated that dependency.
 - The retained September 25 log window was approximately 06:14-19:46 UTC, not the full five days. It contained 174 completed handoffs and five successful retained-path recovery probes. These are observations, not a universal success-rate measurement.
 - FR/EU compatibility in RC9 has not received the same production validation. A stable RC3 installation should remain on RC3 unless its owner opts into a controlled candidate test.
+- [Upstream feedback on September 25](https://github.com/mega-yfue/eufy-sdk/pull/243#issuecomment-5829751884) identifies a broader regional gap: an `ie-pr` account required the `IE` WebSocket region and IE sign host, and account `user_id` differed from `ap_cloud_user_id`. RC9 still contains the narrower FR-to-EU mapping rather than general shard-derived selection. Review shard selection and signing identity with synthetic fixtures before presenting any future candidate as generally region-compatible. This external report is not proof of a defect affecting the current US installation.
 - No new candidate image, stable promotion, default-branch update, or GitHub Release accompanies these tags. The add-on remains experimental.
 
 ## Preserved production settings
