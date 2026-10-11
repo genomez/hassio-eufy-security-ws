@@ -1,0 +1,88 @@
+diff --git a/src/eufysecurity.ts b/src/eufysecurity.ts
+index 6734076..385f042 100644
+--- a/src/eufysecurity.ts
++++ b/src/eufysecurity.ts
+@@ -136,6 +136,11 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+ 
+   private api!: HTTPApi;
+   private megaApi?: MegaHTTPApi;
++  private megaLoginTail?: Promise<void>;
++  private megaInitialLogin?: {
++    promise: ReturnType<EufySecurity["loginMega"]>;
++    owner: { client?: MegaHTTPApi };
++  };
+   private megaAuthRecovery?: GuardedMegaAuthRecovery;
+ 
+   private houses: Houses = {};
+@@ -1700,9 +1705,37 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+   public async loginMega(
+     verifyCode?: string,
+     captcha?: { captchaId: string; answer: string }
++  ): Promise<"ok" | "tfa_required" | "captcha_required" | "locked" | "failed"> {
++    const initial = verifyCode === undefined && captcha === undefined;
++    if (initial && this.megaInitialLogin && this.megaInitialLogin.owner.client === this.megaApi) {
++      return this.megaInitialLogin.promise;
++    }
++
++    const capturedCaptcha = captcha === undefined ? undefined : { ...captcha };
++    const previous = this.megaLoginTail ?? Promise.resolve();
++    const owner = { client: this.megaApi };
++    const attempt = previous.then(() => this.loginMegaAttempt(verifyCode, capturedCaptcha, owner));
++    const tail = attempt.then(() => undefined, () => undefined);
++    this.megaLoginTail = tail;
++    if (initial) this.megaInitialLogin = { promise: attempt, owner };
++    try {
++      return await attempt;
++    } finally {
++      if (this.megaInitialLogin?.promise === attempt) this.megaInitialLogin = undefined;
++      if (this.megaLoginTail === tail) this.megaLoginTail = undefined;
++    }
++  }
++
++  private async loginMegaAttempt(
++    verifyCode?: string,
++    captcha?: { captchaId: string; answer: string },
++    owner?: { client?: MegaHTTPApi }
+   ): Promise<"ok" | "tfa_required" | "captcha_required" | "locked" | "failed"> {
+     try {
+-      const mega = await this.getMegaApi();
++      const pendingMega = this.getMegaApi();
++      if (owner) owner.client = this.megaApi;
++      const mega = await pendingMega;
++      if (owner) owner.client = mega;
+       if (mega.hasValidSession() && !verifyCode && !captcha) {
+         try {
+           await this.syncMegaPushRegistration();
+@@ -1714,7 +1747,31 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+ 
+       await mega.estimateDomain();
+       await mega.keyExchange(mega.clusterHost("openapi"));
+-      const result = await mega.login(this.config.username!, this.config.password!, verifyCode, captcha);
++      if (this.megaApi !== mega) {
++        rootMainLogger.warn("v6 login abandoned after Mega client replacement");
++        return "failed";
++      }
++      let result = await mega.login(this.config.username!, this.config.password!, verifyCode, captcha);
++      if (this.megaApi !== mega) {
++        rootMainLogger.warn("v6 login abandoned after Mega client replacement");
++        return "failed";
++      }
++      if (
++        result.code === ResponseErrorCode.CODE_NEED_NEGOTIATE_KEY &&
++        verifyCode === undefined &&
++        captcha === undefined
++      ) {
++        await mega.keyExchange(mega.clusterHost("openapi"));
++        if (this.megaApi !== mega) {
++          rootMainLogger.warn("v6 login abandoned after Mega client replacement");
++          return "failed";
++        }
++        result = await mega.login(this.config.username!, this.config.password!);
++        if (this.megaApi !== mega) {
++          rootMainLogger.warn("v6 login abandoned after Mega client replacement");
++          return "failed";
++        }
++      }
+ 
+       if (result.code === ResponseErrorCode.CODE_NEED_VERIFY_CODE) {
+         await mega.sendVerifyCode();

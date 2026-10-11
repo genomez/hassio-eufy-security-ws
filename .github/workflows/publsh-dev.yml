@@ -1,28 +1,66 @@
-name: "Publish dev"
+name: Publish qualified RC3 image
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Publish exact export or verify anonymous registry access
+        required: true
+        default: publish
+        type: choice
+        options:
+          - publish
+          - verify-anonymous
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: qualified-rc3-image-publication
+  cancel-in-progress: false
 
 jobs:
   publish:
-    name: Publish
-    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/rc3-login-retry-amd64'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      IMAGE: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64:3.0.18-regional-rtc-rc3-login-retry.1
+      EXPECTED_ID: sha256:d2747d8a57527afefdbc07f5e8942bfae435ba1055f6c828d05313c58e158490
+      EXPORT_SHA256: b05c31f045ebd6d33fbc008a5fce3f1442f6aa8ef667d7525756c9e395a02638
     steps:
-      - name: Checkout the repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: debug
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
+          persist-credentials: false
+      - name: Load and push the qualified export without rebuilding or starting it
+        if: inputs.operation == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          gh release download rc3-login-retry-qualified-export-20261011 --repo "$GITHUB_REPOSITORY" --pattern rc3-login-retry-image.tar.gz
+          printf '%s  rc3-login-retry-image.tar.gz\n' "$EXPORT_SHA256" | sha256sum --check --strict
+          docker load --input rc3-login-retry-image.tar.gz
+          test "$(docker image inspect "$EXPECTED_ID" --format '{{.Id}}')" = "$EXPECTED_ID"
+          test "$(docker image inspect "$EXPECTED_ID" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$EXPECTED_ID" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = 3.0.18-regional-rtc-rc3-login-retry.1
+          docker image inspect "$EXPECTED_ID" --format '{{json .RootFS.Layers}}' > loaded-diff-ids.json
+          python3 -c 'import json; assert json.load(open("loaded-diff-ids.json")) == json.load(open("publication/expected-image.json"))["diff_ids"]'
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker tag "$EXPECTED_ID" "$IMAGE"
+          docker push "$IMAGE"
+          python3 publication/verify_registry.py authenticated
+          docker logout ghcr.io
+      - name: Verify anonymous manifest, config and every layer
+        if: inputs.operation == 'verify-anonymous'
+        run: python3 publication/verify_registry.py anonymous
+      - name: Retain non-secret registry identity receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_TOKEN }}
-      - name: Publish
-        uses: home-assistant/builder@master
-        with:
-          args: |
-            --amd64 --aarch64   \
-            --target eufy-security-ws-dev \
-            --docker-hub bropat
-        #env:
-        #  CAS_API_KEY: ${{ secrets.CAS_TOKEN }}
+          name: registry-identity-${{ inputs.operation }}
+          path: registry-identity.json
+          if-no-files-found: warn
