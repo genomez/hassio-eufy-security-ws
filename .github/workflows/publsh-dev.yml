@@ -13,7 +13,9 @@ on:
           - verify-anonymous
 
 permissions:
-  contents: read
+  # Draft releases are visible only to callers with push access.
+  # This workflow reads the draft asset; it never publishes a release.
+  contents: write
   packages: write
 
 concurrency:
