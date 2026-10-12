@@ -1,82 +1,64 @@
-# Optional RC3 login retry test (amd64 only)
+# RC3 startup-corrected login retry candidate (amd64)
 
-This is an experimental RC3-derived candidate for the initial Mega login 4404
-path. It is not a proven explanation or fix for the reported outage. Offline
-qualification passed 86 compiled login/recovery cases and 37 RTC cases, plus
-native/WASM load, launcher and fake-driver routing/shutdown checks. Real FR/EU
-hardware behavior, Supervisor admission and long-run recovery remain unverified.
+Version `3.0.18-regional-rtc-rc3-login-retry.2` is published and available through
+this experimental branch. Publication is not authorization to install, start,
+authenticate or conduct another trial. The prior single-start allowance has
+already been used. Keep the installed candidate stopped and existing automatic
+update, watchdog/restart and start-on-boot safeguards disabled pending new
+maintainer instructions. Keep Test5 (`rtc_app_live_view_test`) false.
 
-Version: `3.0.18-regional-rtc-rc3-login-retry.1`.
-Image: `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64`.
-Registry manifest: `sha256:897eeac38d4cff847083c4d8f16519e825f15883120812280a2dcda5061482ee`.
-Image configuration digest: `sha256:d2747d8a57527afefdbc07f5e8942bfae435ba1055f6c828d05313c58e158490`.
-The manifest and configuration digests identify different objects within the
-same qualified artifact. Docker image inspect `.Id` may report the configuration
-digest with the classic image store or the manifest digest with the containerd
-image store. Accept either exact full value only when the candidate repository
-RepoDigest matches the manifest above and the platform is linux/amd64. Registry
-config and all nine layers have been compared with the qualified export.
+## Verified artifact identity
 
-## Before installing
+- Repository: `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64`.
+- Version: `3.0.18-regional-rtc-rc3-login-retry.2`.
+- Immutable registry manifest: `sha256:28aeceae1c53c8d2d1351a51801c2f75b386243321e19146f78d910d509e0cea`.
+- Full RepoDigest: `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:28aeceae1c53c8d2d1351a51801c2f75b386243321e19146f78d910d509e0cea`.
+- Configuration digest: `sha256:fe4999e18adfd5a04a270bb6e0724e6a172646a68818d27c0a439774359b7fa7`.
+- Platform: `linux/amd64`.
+- Qualified gzip export SHA-256: `d96ca78fbb13d4462d8cdfef0c67fca3f1b5fbfbdd6bb266546eed20e6f43e4f`.
 
-1. Reconfirm with the maintainer your current add-on repository URL, installed
-   add-on slug, and amd64 architecture. Earlier testing used
-   `regional-rtc-stable-v1`; use your existing repository entry and slot only.
-   Do not add a new repository URL/branch or install another instance. This
-   update is available to everyone following that experimental branch; it is
-   not a default-branch production release. Before updating, turn automatic
-   updates, watchdog/automatic restarts, and start-on-boot off, and keep RC3
-   stopped.
-2. Keep RC3 stopped. Save a local full add-on backup including matching data and
-   options. Retain the old RC3 image and verify locally that the backup and old
-   image/version are actually available for restore. A backup alone does not
-   prove that the old image can be recovered. If recovery cannot be verified,
-   do not install or start. All account information stays private.
-3. After those prerequisites are confirmed, refresh the existing store entry
-   and manually update that existing slot. Retain its data/options and RTC/FLC
-   settings. Keep Test5 (`rtc_app_live_view_test`) false, automatic updates and
-   watchdog/automatic restarts off, and start-on-boot off during the test. Check
-   the selected version and actual installed image identity locally against
-   the accepted full digests, RepoDigest and platform above before
-   authentication. A display name or version string alone is insufficient.
-   If the identity differs or is not
-   verifiable, leave it stopped and report that outcome; do not start to obtain
-   more evidence. No new credentials or raw authentication artifacts are shared.
+Authenticated publication verification and an independent anonymous registry
+read matched the configuration and every compressed/uncompressed layer against
+the exact qualified export. The descriptor preserves its repository basename
+and selects the `.2` version tag; it is not a digest-pinned Supervisor selector.
+Before any separately approved start, require the exact full RepoDigest above
+and matching linux/amd64 platform. Docker inspect `.Id` may be the configuration
+digest or manifest digest depending on image-store implementation; accept only
+those exact full values together with the correct RepoDigest. A display name,
+short hash or version label alone does not establish installed image identity.
 
-## One bounded start
+## What changed and what was qualified
 
-4. Start once, observe for at most 10 minutes, then stop. The candidate permits
-   at most one fresh key exchange/login retry following an initial 4404; it
-   does not automatically retry supplied verification/captcha. Do not reset
-   authentication, delete persisted data, invoke a heal, manually wake devices,
-   open app live view for a test, or replay verification/captcha.
-5. If it connects, you may choose at most one ordinary guard-mode command that
-   is safe for your current physical state, and verify the result locally in
-   the app or physically. Observe natural RTC operation across at least one
-   270-second handoff and normal floodlight/light synchronization. Do not
-   toggle floodlights solely to create a test. If it does not connect, do not
-   issue commands. Preserve packet 800, handoff 1, reconnect 270000 ms, answerer
-   mode, and property refresh 900000 ms.
-6. Stop immediately for repeated 4404 after the single retry, any challenge or
-   lockout, unexpected exit, continued missing RTC credentials, a failed
-   intended command, or unrelated RTC/device/FLC disruption. Stop before
-   entering interactive verification. There is no automatic second start or
-   extended observation window.
+The candidate restores the base image's `/init` entrypoint while retaining
+`CMD ["/run.sh"]`, and guards two optional route/hostname lookups. All nine parent
+filesystem layers are retained; only `/run.sh` differs. Compiled application,
+authentication, RTC/FLC code and dependencies are unchanged.
 
-## Recovery and report
+[Startup qualification run 38303187102](https://github.com/genomez/hassio-eufy-security-ws/actions/runs/38303187102)
+at commit `a74c9d68432ebaf39e0e07d34df11fc5fd1f5674` passed four isolated cases:
+original exit111 reproduction, corrected missing-credentials refusal, synthetic
+CLI startup/shutdown, and unavailable-route fallback startup/shutdown. The
+synthetic cases used the genuine `/init`, launcher, Bashio and CLI path with a
+fake Eufy driver and networking disabled. They do not establish real Supervisor
+integration, cloud authentication, FR/EU hardware or long-run RTC/FLC reliability.
+Earlier offline application tests remain limited to their synthetic scope.
 
-7. If the stop conditions occur, restore the old RC3 image with its matching
-   backed-up data/options locally. Leave it stopped as it was before the test.
-   Do not authenticate again to improve the result. Even a successful test
-   ends at 10 minutes with the candidate stopped; any longer use is a separate
-   decision.
-8. Share only sanitized outcomes and counts/timing: whether it started and
-   connected, whether the single retry occurred, command success if attempted,
-   handoff/FLC observations, and any stop reason. Do not share credentials,
-   PINs, tokens, session/persistence files, raw requests/responses or auth logs.
-   No replacement request for the missing October 5 log or old image digest is
-   part of this test.
+[Publication run 38305482317](https://github.com/genomez/hassio-eufy-security-ws/actions/runs/38305482317)
+loaded and pushed the exact tested export; it did not rebuild or start it.
+The correction addresses the reproduced initialization failure, not proof of
+a fix for the earlier reported outage or real initial Mega login failure.
 
-The default branch and the maintainer's current production stack are outside
-this test. Initial login succeeds or fails independently of whether the
-reported historical incident is explained.
+## Preserve the existing slot and recovery
+
+Use only the existing `regional-rtc-stable-v1` repository entry and add-on slot;
+no new instance, branch or repository URL is needed. Slot, option schema and
+permissions are unchanged. Preserve the original stopped RC3 backup, matching
+data/options, old image and private recovery identity; do not overwrite them
+with candidate recovery copies. Do not share credentials, PINs, tokens, backups,
+persistence, raw authentication logs or private recovery records.
+
+A separately approved installation must finish at an identity-verified stopped
+checkpoint. A new start, trial window or continued operation needs a separate
+explicit decision. Preserve packet800, handoff1, reconnect270000 ms, answerer
+mode and property refresh900000 ms; do not change RTC/FLC settings or invoke a
+heal/authentication reset. The maintainer's production stack is excluded.
