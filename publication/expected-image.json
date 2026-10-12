@@ -1,5 +1,6 @@
 {
-  "image_id": "sha256:d2747d8a57527afefdbc07f5e8942bfae435ba1055f6c828d05313c58e158490",
+  "version": "3.0.18-regional-rtc-rc3-login-retry.2",
+  "image_id": "sha256:fe4999e18adfd5a04a270bb6e0724e6a172646a68818d27c0a439774359b7fa7",
   "diff_ids": [
     "sha256:e63b02c2b5c761df2cb95e657d744f27d95da4e051235a13c80b88cd68eab188",
     "sha256:4dcd329331d878c88eeda296bc922acac56eb5de58297c85b113a745ce483632",
@@ -9,9 +10,17 @@
     "sha256:266d8cb3c101b426581d805eae8d0fe5e7e7843c8d717fb6e53bdc997a71829f",
     "sha256:c102813f7a78747304d31aba9e53ebdadf01cb11fe1f09eaba3aaebd27ec2127",
     "sha256:81d60773a47085dbe58c1fc7df3567c249494380e8f4bc2e1e11da55aae445be",
-    "sha256:3bd48916e526a2aa4d8186393ee99be49d8294e32e98547015979424d4c406f4"
+    "sha256:3bd48916e526a2aa4d8186393ee99be49d8294e32e98547015979424d4c406f4",
+    "sha256:1a926f2320819d2edb56ebf81e79c4b603d722c7374b48946c98fcafe2ef65b1"
+  ],
+  "entrypoint": [
+    "/init"
   ],
   "cmd": [
     "/run.sh"
-  ]
+  ],
+  "export_sha256": "d96ca78fbb13d4462d8cdfef0c67fca3f1b5fbfbdd6bb266546eed20e6f43e4f",
+  "source_run": 38303187102,
+  "source_commit": "a74c9d68432ebaf39e0e07d34df11fc5fd1f5674",
+  "artifact_id": 11770508967
 }

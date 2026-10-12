@@ -1,55 +1,76 @@
-name: Qualify RC3 initialization candidate
+name: Publish qualified RC3 startup export
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Publish exact export or verify anonymous registry identity
+        required: true
+        default: publish
+        type: choice
+        options:
+          - publish
+          - verify-anonymous
 
 permissions:
   contents: read
+  actions: read
+  packages: write
 
 concurrency:
-  group: rc3-init-startup-qualification-${{ github.ref }}
+  group: qualified-rc3-image-publication
   cancel-in-progress: false
 
 jobs:
-  qualify:
-    if: github.ref == 'refs/heads/rc3-init-startup-qualification-20261012'
+  publish:
+    if: github.ref == 'refs/heads/rc3-init-qualified-publication-20261012'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
-      ORIGINAL: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:897eeac38d4cff847083c4d8f16519e825f15883120812280a2dcda5061482ee
-      CANDIDATE: local/eufy-rc3-init:3.0.18-regional-rtc-rc3-login-retry.2
+      IMAGE: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64:3.0.18-regional-rtc-rc3-login-retry.2
+      EXPECTED_ID: sha256:fe4999e18adfd5a04a270bb6e0724e6a172646a68818d27c0a439774359b7fa7
+      EXPORT_SHA256: d96ca78fbb13d4462d8cdfef0c67fca3f1b5fbfbdd6bb266546eed20e6f43e4f
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Pull the exact public parent and build startup-only correction
+      - name: Load and publish only the exact qualified export
+        if: inputs.operation == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p qualification-results
-          docker pull "$ORIGINAL"
-          docker build --network none --pull=false --tag "$CANDIDATE" --file qualification/rc3-init-startup/Dockerfile.candidate qualification/rc3-init-startup
-          python3 qualification/rc3-init-startup/compare_images.py --original "$ORIGINAL" --candidate "$CANDIDATE" --output qualification-results
-      - name: Qualify genuine default startup and shutdown with synthetic data
-        shell: bash
-        run: |
-          set -euo pipefail
-          timeout --signal=TERM --kill-after=15s 240s python3 qualification/rc3-init-startup/fixtures/qualify.py --original "$ORIGINAL" --candidate "$CANDIDATE" --output qualification-results/STARTUP_QUALIFICATION.json
-      - name: Export and bind qualified candidate without publishing
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker image save "$CANDIDATE" | gzip -n > qualification-results/candidate-image.tar.gz
-          python3 qualification/rc3-init-startup/seal_export.py --export qualification-results/candidate-image.tar.gz --results qualification-results
-      - name: Retain qualification receipts and exact candidate export
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          gh api repos/genomez/hassio-eufy-security-ws/actions/artifacts/11770508967 > artifact-source.json
+          python3 -c 'import json; a=json.load(open("artifact-source.json")); assert a["id"] == 11770508967 and not a["expired"] and a["name"] == "rc3-init-startup-qualification-38303187102" and a["workflow_run"]["id"] == 38303187102 and a["workflow_run"]["head_sha"] == "a74c9d68432ebaf39e0e07d34df11fc5fd1f5674"'
+          gh run download 38303187102 --repo "$GITHUB_REPOSITORY" --name rc3-init-startup-qualification-38303187102 --dir qualified-export
+          printf '%s  qualified-export/candidate-image.tar.gz\n' "$EXPORT_SHA256" | sha256sum --check --strict
+          python3 qualification/rc3-init-startup/seal_export.py --export qualified-export/candidate-image.tar.gz --results qualified-export
+          python3 -c 'import json; a=json.load(open("qualified-export/QUALIFIED_CANDIDATE.json")); e=json.load(open("publication/expected-image.json")); assert a["passed"] and a["exportBoundToTestedImage"] and a["exportSha256"] == e["export_sha256"] and a["configDigest"] == e["image_id"] and a["diffIds"] == e["diff_ids"]'
+          docker load --input qualified-export/candidate-image.tar.gz
+          docker image inspect "$EXPECTED_ID" > loaded-image.json
+          python3 -c 'import json; a=json.load(open("loaded-image.json"))[0]; e=json.load(open("publication/expected-image.json")); assert a["Id"] == e["image_id"] and a["Os"] == "linux" and a["Architecture"] == "amd64" and a["Config"]["Entrypoint"] == e["entrypoint"] and a["Config"]["Cmd"] == e["cmd"] and a["RootFS"]["Layers"] == e["diff_ids"] and a["Config"]["Labels"]["org.opencontainers.image.version"] == e["version"]'
+          python3 publication/verify_registry.py preflight
+          if python3 -c 'import json,sys; sys.exit(0 if json.load(open("registry-preflight.json"))["exists"] else 1)'; then
+            echo 'Identical qualified tag already exists; skipping push.'
+          else
+            printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+            docker tag "$EXPECTED_ID" "$IMAGE"
+            docker push "$IMAGE"
+          fi
+          python3 publication/verify_registry.py authenticated
+          docker logout ghcr.io >/dev/null 2>&1 || true
+      - name: Verify anonymous manifest, configuration and all ten layers
+        if: inputs.operation == 'verify-anonymous'
+        run: python3 publication/verify_registry.py anonymous
+      - name: Retain public registry identity receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: rc3-init-startup-qualification-${{ github.run_id }}
+          name: rc3-init-registry-${{ inputs.operation }}
           path: |
-            qualification-results/*.json
-            qualification-results/EXPORT_SHA256.txt
-            qualification-results/candidate-image.tar.gz
+            registry-identity.json
+            registry-preflight.json
           if-no-files-found: warn
           retention-days: 30
-          compression-level: 0
