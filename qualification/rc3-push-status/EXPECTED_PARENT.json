@@ -1,0 +1,30 @@
+{
+  "parentManifest": "sha256:28aeceae1c53c8d2d1351a51801c2f75b386243321e19146f78d910d509e0cea",
+  "parentConfig": "sha256:fe4999e18adfd5a04a270bb6e0724e6a172646a68818d27c0a439774359b7fa7",
+  "diffIds": [
+    "sha256:e63b02c2b5c761df2cb95e657d744f27d95da4e051235a13c80b88cd68eab188",
+    "sha256:4dcd329331d878c88eeda296bc922acac56eb5de58297c85b113a745ce483632",
+    "sha256:3268a80ed15084313eea6841becf8aa324f88d440800607a9679e919b49f70e4",
+    "sha256:6da9dc611513f96fbbb7c40f50a75e1b38f08b70462937ec0bae0e5aae2f4889",
+    "sha256:522ba2c7594f90820c9abaac0ad575b2adc8b38e83680fa2ecbe18b9ebcddae5",
+    "sha256:266d8cb3c101b426581d805eae8d0fe5e7e7843c8d717fb6e53bdc997a71829f",
+    "sha256:c102813f7a78747304d31aba9e53ebdadf01cb11fe1f09eaba3aaebd27ec2127",
+    "sha256:81d60773a47085dbe58c1fc7df3567c249494380e8f4bc2e1e11da55aae445be",
+    "sha256:3bd48916e526a2aa4d8186393ee99be49d8294e32e98547015979424d4c406f4",
+    "sha256:1a926f2320819d2edb56ebf81e79c4b603d722c7374b48946c98fcafe2ef65b1"
+  ],
+  "parentVersion": "3.0.18-regional-rtc-rc3-login-retry.2",
+  "candidateVersion": "3.0.18-regional-rtc-rc3-login-retry.3",
+  "launcherSha256": "0848647298e5b8b2e6eaf78910885560fc66614652070f680e51fe4a0ff18039",
+  "sourceHashes": {
+    "baseline": {
+      "src/eufysecurity.ts": "503ba934284cea0dd03b908e23ee1eacaede7fc05c733986a04bd830ded0de5d",
+      "src/push/service.ts": "0194049e3940c575200c1d4ed9224a9b4a8eada5a505a0f03373c22694d5ffdf"
+    },
+    "candidate": {
+      "src/eufysecurity.ts": "143edbad3d50545d03c8e939cdf88378f5275a839041bc1ec52d1b7562d1e564",
+      "src/push/service.ts": "9456168abd16d4102b443b7e9d38afb31b0d5866248230ab906f7c8140bbc304"
+    }
+  },
+  "sourceCommit": "d941ca02ae338fac769d12ed8ba7866d8ec65f5c"
+}

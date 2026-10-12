@@ -1,0 +1,641 @@
+import { EventEmitter } from "events";
+
+import { rootHTTPLogger } from "../logging";
+import { RtcPeerConnection, RtcPeerDiagnosticState, RtcPeerOptions, RtcTurnConfig } from "./rtcPeer";
+import { RtcSignalingClient } from "./rtcSignaling";
+import { scallJsonToSdpOffer } from "./rtcSdp";
+import { RtcSignalingOptions } from "./types";
+
+export interface RtcSessionOptions extends RtcSignalingOptions {
+  /** NVR/camera channel for scall (0 = hub-level). */
+  channelId?: number;
+  /** admin_user_id for WS account field. */
+  adminUserId?: string;
+  connectTimeoutMs?: number;
+  /**
+   * Harvest TURN creds from scall 100 then hangup without creating a PeerConnection.
+   * Used for Coturn UDP wake so we don't hold a failed relay-only session on the hub.
+   */
+  turnHarvestOnly?: boolean;
+  /** Process-local correlation ID for replacement-session handoff diagnostics. */
+  handoffId?: number;
+}
+
+export interface RtcSessionEvents {
+  connected: () => void;
+  turn: (turn: RtcTurnConfig) => void;
+  error: (err: Error) => void;
+  close: () => void;
+  commandData: (data: Buffer, linkType?: number) => void;
+}
+
+export type RtcNegotiationStage =
+  "connected" | "no_hub_sdp_offer" | "ice_no_selected_pair" | "command_channel_not_open" | "pre_scall_or_unclassified";
+
+export interface RtcNegotiationDiagnostic extends RtcPeerDiagnosticState {
+  stage: RtcNegotiationStage;
+  scallAccepted: boolean;
+  peerInitialized: boolean;
+  sdpHandled: boolean;
+  iceGatheringComplete: boolean;
+}
+
+export function classifyRtcNegotiationStage(state: Omit<RtcNegotiationDiagnostic, "stage">): RtcNegotiationStage {
+  if (state.commandChannelOpen) {
+    return "connected";
+  }
+  if (state.scallAccepted && state.peerInitialized && !state.sdpHandled) {
+    return "no_hub_sdp_offer";
+  }
+  if (state.sdpHandled && !state.selectedPairPresent) {
+    return "ice_no_selected_pair";
+  }
+  if (state.selectedPairPresent) {
+    return "command_channel_not_open";
+  }
+  return "pre_scall_or_unclassified";
+}
+
+export class RtcConnectTimeoutError extends Error {
+  constructor(public readonly diagnostic: RtcNegotiationDiagnostic) {
+    super(`T9000 RTC connect timeout (${diagnostic.stage})`);
+    Object.setPrototypeOf(this, new.target.prototype);
+    this.name = "RtcConnectTimeoutError";
+  }
+}
+
+export function isNoHubSdpOfferTimeout(error: unknown): error is RtcConnectTimeoutError {
+  return error instanceof RtcConnectTimeoutError && error.diagnostic.stage === "no_hub_sdp_offer";
+}
+
+export function shouldRunNoOfferCloudWakeRetry(
+  error: unknown,
+  enabled: boolean,
+  attempted: boolean
+): error is RtcConnectTimeoutError {
+  return enabled && !attempted && isNoHubSdpOfferTimeout(error);
+}
+
+export interface RtcAppLiveViewTestTiming {
+  prepareMs: number;
+  activeMs: number;
+  settleMs: number;
+}
+
+export function isRtcAppLiveViewTestEnabled(value: string | undefined): boolean {
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+export function shouldRunRtcAppLiveViewTest(
+  error: unknown,
+  enabled: boolean,
+  attempted: boolean
+): error is RtcConnectTimeoutError {
+  return enabled && !attempted && isNoHubSdpOfferTimeout(error);
+}
+
+function boundedRtcAppLiveViewDelay(value: string | undefined, fallbackMs: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 300_000)) : fallbackMs;
+}
+
+export function getRtcAppLiveViewTestTiming(values: {
+  prepareMs?: string;
+  activeMs?: string;
+  settleMs?: string;
+}): RtcAppLiveViewTestTiming {
+  return {
+    prepareMs: boundedRtcAppLiveViewDelay(values.prepareMs, 60_000),
+    activeMs: boundedRtcAppLiveViewDelay(values.activeMs, 30_000),
+    settleMs: boundedRtcAppLiveViewDelay(values.settleMs, 15_000),
+  };
+}
+
+interface ScallCallPayload {
+  status?: number;
+  turn?: RtcTurnConfig;
+}
+
+interface InfoPayload {
+  format?: string;
+  value?: string;
+  candidate?: string;
+  sdp?: string;
+}
+
+/**
+ * Full T9000 RTC session: sign → WS auth → scall → WebRTC answer → data channels.
+ */
+export class RtcSession extends EventEmitter {
+  private readonly signaling: RtcSignalingClient;
+  private readonly peer = new RtcPeerConnection();
+  private readonly channelId: number;
+  private turn?: RtcTurnConfig;
+  private authOk = false;
+  private connected = false;
+  private connectedAt?: number;
+  private closed = false;
+  private sdpHandled = false;
+  private scallAccepted = false;
+  private peerInitialized = false;
+  private iceGatheringComplete = false;
+  // T9000 2026-07 firmware: the hub grants TURN (scall 100) then waits for the CLIENT
+  // to send the SDP offer. When enabled we offer first and treat the hub reply as an answer.
+  // Default is answerer (hub offers). Client-offer mode can ICE-connect then stall
+  // with hub ignoring DTLS ClientHello on current T9000 firmware — see RTC_CLIENT_OFFER.
+  private readonly isOfferer = process.env.RTC_CLIENT_OFFER === "1" || process.env.RTC_CLIENT_OFFER === "true";
+  /** True once we have sent (or are sending) a client offer — hub SDP is then treated as answer. */
+  private actingAsOfferer = false;
+  private clientOfferSent = false;
+  private hubOfferFallbackTimer?: NodeJS.Timeout;
+  private messageChain: Promise<void> = Promise.resolve();
+  private signalingKeepaliveTimer?: NodeJS.Timeout;
+  private readonly signalingKeepaliveMs = 25_000;
+  private fetchSignAbortController?: AbortController;
+  private readonly fetchSignTimeoutMs = Math.max(
+    5_000,
+    Number(process.env.RTC_FETCH_SIGN_TIMEOUT_MS ?? "15000") || 15_000
+  );
+
+  constructor(private readonly opts: RtcSessionOptions) {
+    super();
+    this.channelId = opts.channelId ?? 0;
+    this.signaling = new RtcSignalingClient({
+      ...opts,
+      adminUserId: opts.adminUserId,
+    });
+    this.reportHandoffPhase("session_initialized");
+
+    this.signaling.on("message", (inner) => {
+      this.messageChain = this.messageChain
+        .then(() => this.handleSignalingMessage(inner))
+        .catch((err) => {
+          const error = err instanceof Error ? err : new Error(String(err));
+          rootHTTPLogger.error("RtcSession message handler error", { error: error.message });
+          this.emit("error", error);
+        });
+    });
+    this.signaling.on("close", (code, reason) => {
+      const uptimeMs = this.connectedAt ? Date.now() - this.connectedAt : undefined;
+      rootHTTPLogger.info("RtcSession signaling closed", { code, reason: reason || undefined, uptimeMs });
+      this.reportHandoffPhase("signaling_closed", { code, uptimeMs });
+      this.stopSignalingKeepalive();
+      this.emit("close");
+    });
+    this.signaling.on("error", (err) => {
+      this.reportHandoffPhase("signaling_error");
+      this.emit("error", err);
+    });
+
+    this.peer.on("iceCandidate", (candidate) => {
+      // Portal: SDP answer on channelId 0, trickle ICE on channelId 1.
+      this.signaling.sendInfoCandidate(candidate, 1);
+    });
+    this.peer.on("iceGatheringComplete", () => {
+      this.iceGatheringComplete = true;
+      rootHTTPLogger.info("RtcSession ICE gathering complete — sending end-of-candidates");
+      this.reportHandoffPhase("ice_gathering_complete");
+      this.signaling.sendInfoEndOfCandidates(1);
+    });
+    this.peer.on("commandChannelOpen", () => {
+      this.reportHandoffPhase("command_channel_open");
+      if (!this.connected) {
+        this.connected = true;
+        this.connectedAt = Date.now();
+        rootHTTPLogger.info("RtcSession connected — WebrtcDataChannel open");
+        this.startSignalingKeepalive();
+        this.emit("connected");
+      }
+    });
+    this.peer.on("error", (err) => {
+      this.reportHandoffPhase("peer_error");
+      this.emit("error", err);
+    });
+    this.peer.on("connectionState", (state) => {
+      this.reportHandoffPhase("peer_connection_state", { state });
+      // Propagate a dropped peer connection immediately so Station reconnects fast, instead of
+      // waiting ~80s for the live-poll watchdog to notice (SCTP/ICE can drop after ~1 min).
+      if ((state === "failed" || state === "closed") && !this.closed && this.connected) {
+        rootHTTPLogger.info("RtcSession peer connection lost — signaling close", { state });
+        this.connected = false;
+        this.stopSignalingKeepalive();
+        this.emit("close");
+      }
+    });
+    this.peer.on("data", (label, data, linkType) => {
+      if (label === "WebrtcDataChannel") {
+        this.emit("commandData", data, linkType ?? 1);
+      }
+    });
+  }
+
+  public async connect(): Promise<void> {
+    this.reportHandoffPhase("fetch_sign_start");
+    const abortController = new AbortController();
+    this.fetchSignAbortController = abortController;
+    const fetchSignTimer = setTimeout(() => {
+      this.reportHandoffPhase("fetch_sign_abort_timer_fired", { timeoutMs: this.fetchSignTimeoutMs });
+      abortController.abort(new Error(`RtcSignaling fetchSign timeout after ${this.fetchSignTimeoutMs}ms`));
+    }, this.fetchSignTimeoutMs);
+    this.reportHandoffPhase("fetch_sign_abort_timer_armed", { timeoutMs: this.fetchSignTimeoutMs });
+    try {
+      await this.signaling.fetchSign({
+        signal: abortController.signal,
+        reportPhase: (phase, details) => this.reportHandoffPhase(phase, details),
+      });
+    } catch (error) {
+      this.reportHandoffPhase("fetch_sign_failed", {
+        aborted: abortController.signal.aborted,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      throw error;
+    } finally {
+      clearTimeout(fetchSignTimer);
+      if (this.fetchSignAbortController === abortController) {
+        this.fetchSignAbortController = undefined;
+      }
+      this.reportHandoffPhase("fetch_sign_abort_timer_cleared");
+    }
+    this.reportHandoffPhase("fetch_sign_complete");
+    this.reportHandoffPhase("websocket_connect_start");
+    await this.signaling.connect();
+    this.reportHandoffPhase("websocket_connect_complete");
+    this.reportHandoffPhase("auth_wait_start");
+    await this.waitForAuth();
+    this.reportHandoffPhase("auth_complete");
+    rootHTTPLogger.info("RtcSession auth ok — sending scall", { channelId: this.channelId });
+    this.reportHandoffPhase("scall_send");
+    this.signaling.sendCall(this.channelId);
+  }
+
+  public isCommandChannelReady(): boolean {
+    return this.peer.isCommandChannelReady();
+  }
+
+  public getNegotiationDiagnostic(): RtcNegotiationDiagnostic {
+    const state = {
+      ...this.peer.getDiagnosticState(),
+      scallAccepted: this.scallAccepted,
+      peerInitialized: this.peerInitialized,
+      sdpHandled: this.sdpHandled,
+      iceGatheringComplete: this.iceGatheringComplete,
+    };
+    return {
+      stage: classifyRtcNegotiationStage(state),
+      ...state,
+    };
+  }
+
+  public createConnectTimeoutError(): RtcConnectTimeoutError {
+    return new RtcConnectTimeoutError(this.getNegotiationDiagnostic());
+  }
+
+  public sendCommand(data: Buffer): boolean {
+    return this.peer.sendCommand(data);
+  }
+
+  public close(): void {
+    this.reportHandoffPhase("session_close_called");
+    this.closed = true;
+    this.connected = false;
+    if (this.fetchSignAbortController && !this.fetchSignAbortController.signal.aborted) {
+      this.reportHandoffPhase("fetch_sign_aborted_by_session_close");
+      this.fetchSignAbortController.abort(new Error("RtcSession closed during fetchSign"));
+    }
+    this.clearHubOfferFallback();
+    this.stopSignalingKeepalive();
+    try {
+      this.signaling.sendHangup(this.channelId);
+    } catch {
+      /* ignore */
+    }
+    this.signaling.close();
+    this.peer.close();
+  }
+
+  private waitForAuth(timeoutMs = 15000): Promise<void> {
+    if (this.authOk) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.reportHandoffPhase("auth_timeout");
+        reject(new Error("RtcSession auth timeout"));
+      }, timeoutMs);
+      const onMsg = (inner: { action?: number; code?: number }) => {
+        if (inner.action === 1 && inner.code === 200) {
+          this.authOk = true;
+          clearTimeout(timer);
+          this.signaling.off("message", onMsg);
+          resolve();
+        }
+      };
+      this.signaling.on("message", onMsg);
+    });
+  }
+
+  private rtc408Retries = 0;
+
+  private async handleSignalingMessage(inner: {
+    action?: number;
+    dataType?: string;
+    data?: string;
+    code?: number;
+  }): Promise<void> {
+    if (!inner.data) {
+      if (inner.action === 1 && inner.code === 200) {
+        this.authOk = true;
+      }
+      return;
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(inner.data) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+
+    if (process.env.RTC_VERBOSE === "1" || process.env.RTC_VERBOSE === "true") {
+      rootHTTPLogger.info("RtcSession RAW signaling frame", {
+        dataType: inner.dataType,
+        action: inner.action,
+        code: inner.code,
+        payloadKeys: Object.keys(payload),
+        raw: inner.data.length > 4000 ? `${inner.data.slice(0, 4000)}…(${inner.data.length})` : inner.data,
+      });
+    }
+
+    const dataType = inner.dataType;
+    if (dataType !== "scall" && dataType !== "call") {
+      rootHTTPLogger.info("RtcSession signaling message", {
+        dataType,
+        format: payload.format,
+        hasValue: Boolean(payload.value ?? payload.sdp),
+      });
+    }
+
+    if (dataType === "hangup") {
+      const uptimeMs = this.connectedAt ? Date.now() - this.connectedAt : undefined;
+      rootHTTPLogger.warn("RtcSession hub hangup", {
+        uptimeMs,
+        channelId: (inner as { channelId?: number }).channelId,
+      });
+      return;
+    }
+
+    if (dataType === "scall" || dataType === "call") {
+      await this.handleCallResponse(payload as ScallCallPayload);
+    } else if (dataType === "info") {
+      await this.handleInfoResponse(payload as InfoPayload);
+    }
+  }
+
+  private async handleCallResponse(payload: ScallCallPayload): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    const status = payload.status;
+    rootHTTPLogger.info("RtcSession scall response", { status, hasTurn: !!payload.turn });
+    this.reportHandoffPhase("scall_response", { status, hasTurn: !!payload.turn });
+
+    if (status === 100 && payload.turn) {
+      this.rtc408Retries = 0;
+      this.scallAccepted = true;
+      this.turn = payload.turn;
+      this.emit("turn", payload.turn);
+      if (this.opts.turnHarvestOnly) {
+        rootHTTPLogger.info("RtcSession turn harvest — hangup without peer init", {
+          channelId: this.channelId,
+        });
+        // Release the hub slot immediately; caller runs Coturn UDP burst separately.
+        setImmediate(() => {
+          if (!this.closed) {
+            this.close();
+          }
+        });
+        return;
+      }
+      this.reportHandoffPhase("peer_init_start");
+      await this.peer.initWithTurn(payload.turn, this.resolvePeerOptions());
+      this.peerInitialized = true;
+      this.reportHandoffPhase("peer_init_complete");
+      if (this.isOfferer && !this.clientOfferSent) {
+        await this.sendClientOffer("initial");
+      } else if (!this.isOfferer) {
+        // Hub often waits ~20–25s on TURN before offering when TURN is unreachable.
+        // If it hasn't offered yet, send our own offer so negotiation can proceed.
+        this.scheduleHubOfferFallback();
+      }
+    } else if (status === 200) {
+      this.signaling.sendAck(this.channelId);
+    } else if (status === 486 || status === 408) {
+      this.rtc408Retries++;
+      rootHTTPLogger.warn("RtcSession scall retry", { status, retries: this.rtc408Retries });
+      if (this.closed) {
+        return;
+      }
+      try {
+        this.signaling.sendHangup(this.channelId);
+      } catch {
+        /* ignore */
+      }
+      this.peer.close();
+      this.sdpHandled = false;
+      this.clientOfferSent = false;
+      this.actingAsOfferer = false;
+      this.clearHubOfferFallback();
+      this.turn = undefined;
+      this.connected = false;
+      const waitMs = Math.min(5000 + this.rtc408Retries * 5000, 30000);
+      await new Promise((r) => setTimeout(r, waitMs));
+      if (this.closed) {
+        return;
+      }
+      if (this.rtc408Retries >= 3) {
+        this.emit("error", new Error(`RtcSession scall ${status} after ${this.rtc408Retries} retries`));
+        return;
+      }
+      this.signaling.sendCall(this.channelId);
+    }
+  }
+
+  private resolvePeerOptions(): RtcPeerOptions {
+    const envPolicy = process.env.RTC_ICE_POLICY?.toLowerCase();
+    const iceTransportPolicy =
+      this.opts.iceTransportPolicy ?? (envPolicy === "all" ? "all" : envPolicy === "relay" ? "relay" : "all");
+    const envSetup = process.env.RTC_DTLS_SETUP?.toLowerCase();
+    const dtlsSetup =
+      this.opts.dtlsSetup ?? (envSetup === "active" ? "active" : envSetup === "passive" ? "passive" : "passive");
+    return {
+      iceTransportPolicy,
+      dtlsSetup,
+      allowTurn: this.opts.allowTurn,
+    };
+  }
+
+  private clearHubOfferFallback(): void {
+    if (this.hubOfferFallbackTimer) {
+      clearTimeout(this.hubOfferFallbackTimer);
+      this.hubOfferFallbackTimer = undefined;
+    }
+  }
+
+  /**
+   * When waiting for the hub to offer, optionally send our own offer after a timeout.
+   * Disabled by default (RTC_HUB_OFFER_WAIT_MS=0): client-offer DTLS is currently unreliable
+   * on this firmware; enable only when probing a faster reconnect path.
+   */
+  private scheduleHubOfferFallback(): void {
+    this.clearHubOfferFallback();
+    const waitMs = Number(process.env.RTC_HUB_OFFER_WAIT_MS ?? 0);
+    if (!Number.isFinite(waitMs) || waitMs <= 0) {
+      return;
+    }
+    this.hubOfferFallbackTimer = setTimeout(() => {
+      this.hubOfferFallbackTimer = undefined;
+      void this.sendClientOffer("hub_offer_timeout");
+    }, waitMs);
+  }
+
+  private async sendClientOffer(reason: "initial" | "hub_offer_timeout"): Promise<void> {
+    if (this.closed || this.sdpHandled || this.clientOfferSent) {
+      return;
+    }
+    this.clientOfferSent = true;
+    this.actingAsOfferer = true;
+    try {
+      const offerSdp = await this.peer.createOffer();
+      if (this.closed || this.sdpHandled) {
+        return;
+      }
+      const scallJson = this.peer.getCommandChannelScallJson(offerSdp);
+      this.signaling.sendInfoSdp(scallJson, this.channelId);
+      rootHTTPLogger.info("RtcSession sent client SDP offer", { len: offerSdp.length, reason });
+    } catch (err) {
+      this.clientOfferSent = false;
+      this.actingAsOfferer = false;
+      rootHTTPLogger.warn("RtcSession client offer failed", {
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async handleInfoResponse(payload: InfoPayload): Promise<void> {
+    if (payload.format === "CANDIDATE") {
+      if (!payload.value) {
+        rootHTTPLogger.debug("RtcSession remote end-of-candidates");
+        return;
+      }
+      await this.peer.addRemoteCandidate(payload.value);
+      return;
+    }
+
+    if (payload.candidate !== undefined) {
+      if (!payload.candidate) {
+        rootHTTPLogger.debug("RtcSession remote end-of-candidates (candidate channel)");
+        return;
+      }
+      await this.peer.addRemoteCandidate(payload.candidate);
+      return;
+    }
+
+    const sdpPayload = payload.value ?? payload.sdp;
+    if (!sdpPayload) {
+      return;
+    }
+
+    if (payload.format === "SDP" || payload.sdp) {
+      if (this.sdpHandled) {
+        return;
+      }
+      this.sdpHandled = true;
+      this.clearHubOfferFallback();
+      let sdpOffer: string;
+      try {
+        const json = JSON.parse(sdpPayload);
+        sdpOffer = scallJsonToSdpOffer(json);
+      } catch {
+        sdpOffer = sdpPayload;
+      }
+
+      if (!this.turn) {
+        rootHTTPLogger.warn("RtcSession SDP before TURN — waiting");
+      }
+
+      if (this.actingAsOfferer || this.isOfferer) {
+        // We offered (or fallback-offered); this remote SDP is the hub's answer.
+        rootHTTPLogger.info("RtcSession received SDP answer", { len: sdpOffer.length });
+        this.reportHandoffPhase("sdp_answer_received");
+        await this.peer.handleRemoteAnswer(sdpOffer);
+        this.reportHandoffPhase("sdp_answer_applied");
+        return;
+      }
+
+      rootHTTPLogger.info("RtcSession received SDP offer", { len: sdpOffer.length });
+      this.reportHandoffPhase("sdp_offer_received");
+      const answerSdp = await this.peer.handleRemoteOffer(sdpOffer);
+      this.reportHandoffPhase("sdp_offer_applied");
+      let sendSdp = answerSdp;
+      if (process.env.RTC_DELAY_SDP_UNTIL_GATHERING === "1") {
+        try {
+          await this.peer.waitForIceGatheringComplete();
+          sendSdp = this.peer.getLocalAnswerSdp() ?? answerSdp;
+          rootHTTPLogger.info("RtcSession SDP answer refreshed after ICE gathering", {
+            candidates: (sendSdp.match(/a=candidate:/g) ?? []).length,
+          });
+        } catch (err) {
+          rootHTTPLogger.warn("RtcSession ICE gathering wait failed — sending initial answer", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const scallJson = this.peer.getCommandChannelScallJson(sendSdp);
+      this.signaling.sendInfoSdp(scallJson, this.channelId);
+      rootHTTPLogger.info("RtcSession sent SDP answer");
+      this.reportHandoffPhase("sdp_answer_sent");
+    }
+  }
+
+  private reportHandoffPhase(phase: string, details: Record<string, unknown> = {}): void {
+    if (this.opts.handoffId === undefined) {
+      return;
+    }
+    try {
+      rootHTTPLogger.info("RtcSession handoff phase", {
+        handoffId: this.opts.handoffId,
+        phase,
+        ...details,
+      });
+    } catch {
+      /* diagnostics must never change RTC behavior */
+    }
+  }
+
+  private startSignalingKeepalive(): void {
+    this.stopSignalingKeepalive();
+    const tick = (): void => {
+      if (this.closed || !this.connected) {
+        return;
+      }
+      try {
+        this.signaling.sendKeepalive();
+        rootHTTPLogger.debug("RtcSession signaling keepalive sent");
+      } catch (err) {
+        rootHTTPLogger.warn("RtcSession signaling keepalive failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      this.signalingKeepaliveTimer = setTimeout(tick, this.signalingKeepaliveMs);
+    };
+    this.signalingKeepaliveTimer = setTimeout(tick, this.signalingKeepaliveMs);
+  }
+
+  private stopSignalingKeepalive(): void {
+    if (this.signalingKeepaliveTimer) {
+      clearTimeout(this.signalingKeepaliveTimer);
+      this.signalingKeepaliveTimer = undefined;
+    }
+  }
+}
