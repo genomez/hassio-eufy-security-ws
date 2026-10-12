@@ -9,9 +9,13 @@ hardware behavior, Supervisor admission and long-run recovery remain unverified.
 Version: `3.0.18-regional-rtc-rc3-login-retry.1`.
 Image: `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64`.
 Registry manifest: `sha256:897eeac38d4cff847083c4d8f16519e825f15883120812280a2dcda5061482ee`.
-Image config/ID: `sha256:d2747d8a57527afefdbc07f5e8942bfae435ba1055f6c828d05313c58e158490`.
-The manifest and config IDs are different identifiers. Registry config and all
-nine layers have been compared with the qualified export.
+Image configuration digest: `sha256:d2747d8a57527afefdbc07f5e8942bfae435ba1055f6c828d05313c58e158490`.
+The manifest and configuration digests identify different objects within the
+same qualified artifact. Docker image inspect `.Id` may report the configuration
+digest with the classic image store or the manifest digest with the containerd
+image store. Accept either exact full value only when the candidate repository
+RepoDigest matches the manifest above and the platform is linux/amd64. Registry
+config and all nine layers have been compared with the qualified export.
 
 ## Before installing
 
@@ -33,8 +37,9 @@ nine layers have been compared with the qualified export.
    settings. Keep Test5 (`rtc_app_live_view_test`) false, automatic updates and
    watchdog/automatic restarts off, and start-on-boot off during the test. Check
    the selected version and actual installed image identity locally against
-   the manifest/config IDs above before authentication. A display name or
-   version string alone is insufficient. If the identity differs or is not
+   the accepted full digests, RepoDigest and platform above before
+   authentication. A display name or version string alone is insufficient.
+   If the identity differs or is not
    verifiable, leave it stopped and report that outcome; do not start to obtain
    more evidence. No new credentials or raw authentication artifacts are shared.
 
