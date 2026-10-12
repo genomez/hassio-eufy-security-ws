@@ -1,0 +1,182 @@
+"""Hosted-only default-entrypoint qualification; never prints container logs/options."""
+import argparse
+import json
+import pathlib
+import re
+import subprocess
+import tempfile
+import time
+import uuid
+
+ORIGINAL = 'ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:897eeac38d4cff847083c4d8f16519e825f15883120812280a2dcda5061482ee'
+MISSING = 'Required parameters username and/or password not set. Starting aborted!'
+ENVDIR = '/run/s6/container_environment'
+CLI = '/usr/src/app/node_modules/eufy-security-ws/dist/bin/server.js'
+ALLOWED = {'preloadEntered', 's6EnvironmentPresent', 'launcherBytesVerified', 'actualCliArgvVerified',
+           'rtcDefaultsVerified', 'launcherConfigVerified', 'fakeInitialize',
+           'fakeMegaLogin', 'fakeConnect', 'serverListening', 'readyForStop',
+           'sigtermObserved', 'driverClose', 'serverClosed', 'blockedOperation'}
+CURRENT_CASE = 'not_started'
+FAILURE_MARKERS = {
+    'docker_operation_failed', 'trace_schema', 'trace_marker_not_allowlisted',
+    'default_process_mismatch', 'network_not_none', 'privileged_container',
+    'synthetic_exited_before_ready', 'synthetic_readiness_timeout',
+    'empty_case_exit_timeout', 'negative_control_exit_not_111',
+    'negative_control_expected_envdir_missing', 'negative_control_reached_application',
+    'empty_options_exit_not_zero', 'empty_options_missing_refusal_marker',
+    'empty_options_node_or_init_failure', 'synthetic_shutdown_failed',
+    'node_exit_not_zero', 'unexpected_transport_attempt',
+    'required_trace_missing_or_repeated', 'shutdown_trace_order',
+    'original_image_not_fixed_digest', 'corrected_image_equals_original',
+    'image_identity_not_digest',
+}
+
+
+def docker(*args, timeout=45, combine_logs=False):
+    result = subprocess.run(['docker', *args], capture_output=True, text=True, timeout=timeout)
+    if result.returncode:
+        raise RuntimeError('docker_operation_failed')
+    if combine_logs:
+        require(args and args[0] == 'logs', 'docker_operation_failed')
+        return result.stdout + result.stderr
+    return result.stdout
+
+
+def inspect(name):
+    return json.loads(docker('inspect', name))[0]
+
+
+def require(condition, marker):
+    if not condition:
+        raise AssertionError(marker)
+
+
+def read_trace(data):
+    target = data / 'qualification-trace.json'
+    if not target.exists():
+        return None
+    result = json.loads(target.read_text())
+    require(set(result) == {'schema', 'trace', 'blockedOperations', 'exitCode'}, 'trace_schema')
+    require(result['schema'] == 1 and isinstance(result['trace'], list), 'trace_schema')
+    require(all(event in ALLOWED for event in result['trace']), 'trace_marker_not_allowlisted')
+    return result
+
+
+def run_case(image, mode, fixtures, root):
+    name = 'rc3-init-qualification-' + uuid.uuid4().hex
+    data = root / mode
+    data.mkdir()
+    options = {} if mode != 'corrected-synthetic' else {
+        'username': 'qualification@example.invalid',
+        'password': 'synthetic-only-no-authentication', 'country': 'FR',
+        'event_duration': 10, 'polling_interval': 15,
+        'trusted_device_name': 'isolated-startup-qualification',
+        'accept_invitations': False, 'stations': [], 'debug': False,
+        'ipv4first': False, 'rtc_app_live_view_test': False,
+    }
+    (data / 'options.json').write_text(json.dumps(options))
+    created = False
+    try:
+        # No command, --entrypoint, host port, socket, auth environment or Supervisor mount.
+        docker('create', '--name', name, '--platform', 'linux/amd64', '--network', 'none',
+               '--mount', f'type=bind,src={fixtures},dst=/qualification,readonly',
+               '--mount', f'type=bind,src={data},dst=/data',
+               '--env', 'NODE_OPTIONS=--require=/qualification/preload.cjs', image)
+        created = True
+        definition = inspect(name)
+        require(isinstance(definition['Image'], str)
+                and re.fullmatch(r'sha256:[0-9a-f]{64}', definition['Image']) is not None,
+                'image_identity_not_digest')
+        expected_path = '/run.sh' if mode == 'original-empty' else '/init'
+        expected_args = [] if mode == 'original-empty' else ['/run.sh']
+        require(definition['Path'] == expected_path and definition['Args'] == expected_args,
+                'default_process_mismatch')
+        require(definition['HostConfig']['NetworkMode'] == 'none', 'network_not_none')
+        require(not definition['HostConfig']['Privileged'], 'privileged_container')
+        docker('start', name)
+        deadline = time.monotonic() + 40
+        if mode == 'corrected-synthetic':
+            while time.monotonic() < deadline:
+                evidence = read_trace(data)
+                if evidence and 'readyForStop' in evidence['trace']:
+                    break
+                require(inspect(name)['State']['Running'], 'synthetic_exited_before_ready')
+                time.sleep(0.2)
+            else:
+                raise AssertionError('synthetic_readiness_timeout')
+            # -1 waits indefinitely instead of falling back to SIGKILL. CLI timeout only
+            # limits this caller; a failed fixture leaves its owned container for review.
+            docker('stop', '--signal', 'SIGTERM', '--timeout', '-1', name, timeout=40)
+        else:
+            while inspect(name)['State']['Running'] and time.monotonic() < deadline:
+                time.sleep(0.2)
+            require(not inspect(name)['State']['Running'], 'empty_case_exit_timeout')
+        state = inspect(name)['State']
+        logs = docker('logs', name, combine_logs=True)
+        evidence = read_trace(data)
+        if mode == 'original-empty':
+            require(state['ExitCode'] == 111, 'negative_control_exit_not_111')
+            require(ENVDIR in logs and 's6-envdir' in logs, 'negative_control_expected_envdir_missing')
+            require(MISSING not in logs and evidence is None, 'negative_control_reached_application')
+        elif mode == 'corrected-empty':
+            require(state['ExitCode'] == 0, 'empty_options_exit_not_zero')
+            require(MISSING in logs, 'empty_options_missing_refusal_marker')
+            require('s6-envdir' not in logs and evidence is None, 'empty_options_node_or_init_failure')
+        else:
+            require(state['ExitCode'] == 0 and not state['OOMKilled'], 'synthetic_shutdown_failed')
+            require(evidence is not None and evidence['exitCode'] == 0, 'node_exit_not_zero')
+            require(evidence['blockedOperations'] == 0, 'unexpected_transport_attempt')
+            required = ALLOWED - {'blockedOperation'}
+            require(all(evidence['trace'].count(marker) == 1 for marker in required), 'required_trace_missing_or_repeated')
+            require(evidence['trace'].index('readyForStop') < evidence['trace'].index('sigtermObserved')
+                    < evidence['trace'].index('driverClose') < evidence['trace'].index('serverClosed'),
+                    'shutdown_trace_order')
+        return {'case': mode, 'passed': True, 'exitCode': state['ExitCode'],
+                'imageId': definition['Image'],
+                'defaultPath': definition['Path'], 'defaultArgs': definition['Args'],
+                'networkMode': 'none', 'trace': evidence['trace'] if evidence else [],
+                'rawLogsOmitted': True, 'forcedTermination': False}
+    finally:
+        if created:
+            # Never forcibly remove a running container: preserve failed live evidence.
+            if not inspect(name)['State']['Running']:
+                docker('rm', name)
+
+
+def main():
+    global CURRENT_CASE
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--original', required=True)
+    parser.add_argument('--candidate', required=True)
+    parser.add_argument('--output', required=True, type=pathlib.Path)
+    args = parser.parse_args()
+    require(args.original == ORIGINAL, 'original_image_not_fixed_digest')
+    require(args.candidate != ORIGINAL, 'corrected_image_equals_original')
+    fixtures = pathlib.Path(__file__).resolve().parent
+    results = []
+    with tempfile.TemporaryDirectory(prefix='rc3-init-synthetic-') as directory:
+        root = pathlib.Path(directory)
+        for image, mode in [(args.original, 'original-empty'),
+                            (args.candidate, 'corrected-empty'),
+                            (args.candidate, 'corrected-synthetic')]:
+            CURRENT_CASE = mode
+            results.append(run_case(image, mode, fixtures, root))
+    receipt = {'schema': 1, 'passed': True, 'originalImage': ORIGINAL,
+               'correctedImage': args.candidate, 'cases': results,
+               'realDefaultEntrypoint': True, 'realLauncherAndCli': True,
+               'realCloudAuthentication': False, 'productionAccess': False}
+    args.output.write_text(json.dumps(receipt, indent=2) + '\n')
+    print(json.dumps({'status': 'passed', 'cases': [result['case'] for result in results]}))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as error:
+        # Docker errors/logs or assertion values are never forwarded into receipts.
+        failure_marker = str(error) if isinstance(error, (AssertionError, RuntimeError)) else None
+        if failure_marker not in FAILURE_MARKERS:
+            failure_marker = 'unclassified_fixture_failure'
+        print(json.dumps({'status': 'failed', 'errorType': type(error).__name__,
+                          'case': CURRENT_CASE, 'failureMarker': failure_marker}))
+        raise SystemExit(1)

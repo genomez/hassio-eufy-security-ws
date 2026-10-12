@@ -1,0 +1,4 @@
+FROM ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:897eeac38d4cff847083c4d8f16519e825f15883120812280a2dcda5061482ee
+LABEL org.opencontainers.image.version="3.0.18-regional-rtc-rc3-login-retry.2"
+ENTRYPOINT ["/init"]
+CMD ["/run.sh"]

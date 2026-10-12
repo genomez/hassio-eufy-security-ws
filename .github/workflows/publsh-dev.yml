@@ -1,68 +1,55 @@
-name: Publish qualified RC3 image
+name: Qualify RC3 initialization candidate
 
 on:
   workflow_dispatch:
-    inputs:
-      operation:
-        description: Publish exact export or verify anonymous registry access
-        required: true
-        default: publish
-        type: choice
-        options:
-          - publish
-          - verify-anonymous
 
 permissions:
-  # Draft releases are visible only to callers with push access.
-  # This workflow reads the draft asset; it never publishes a release.
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
-  group: qualified-rc3-image-publication
+  group: rc3-init-startup-qualification-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish:
-    if: github.ref == 'refs/heads/rc3-login-retry-amd64'
+  qualify:
+    if: github.ref == 'refs/heads/rc3-init-startup-qualification-20261012'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
-      IMAGE: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64:3.0.18-regional-rtc-rc3-login-retry.1
-      EXPECTED_ID: sha256:d2747d8a57527afefdbc07f5e8942bfae435ba1055f6c828d05313c58e158490
-      EXPORT_SHA256: b05c31f045ebd6d33fbc008a5fce3f1442f6aa8ef667d7525756c9e395a02638
+      ORIGINAL: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:897eeac38d4cff847083c4d8f16519e825f15883120812280a2dcda5061482ee
+      CANDIDATE: local/eufy-rc3-init:3.0.18-regional-rtc-rc3-login-retry.2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Load and push the qualified export without rebuilding or starting it
-        if: inputs.operation == 'publish'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Pull the exact public parent and build configuration-only correction
         shell: bash
         run: |
           set -euo pipefail
-          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-          gh release download rc3-login-retry-qualified-export-20261011 --repo "$GITHUB_REPOSITORY" --pattern rc3-login-retry-image.tar.gz
-          printf '%s  rc3-login-retry-image.tar.gz\n' "$EXPORT_SHA256" | sha256sum --check --strict
-          docker load --input rc3-login-retry-image.tar.gz
-          test "$(docker image inspect "$EXPECTED_ID" --format '{{.Id}}')" = "$EXPECTED_ID"
-          test "$(docker image inspect "$EXPECTED_ID" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
-          test "$(docker image inspect "$EXPECTED_ID" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = 3.0.18-regional-rtc-rc3-login-retry.1
-          docker image inspect "$EXPECTED_ID" --format '{{json .RootFS.Layers}}' > loaded-diff-ids.json
-          python3 -c 'import json; assert json.load(open("loaded-diff-ids.json")) == json.load(open("publication/expected-image.json"))["diff_ids"]'
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker tag "$EXPECTED_ID" "$IMAGE"
-          docker push "$IMAGE"
-          python3 publication/verify_registry.py authenticated
-          docker logout ghcr.io
-      - name: Verify anonymous manifest, config and every layer
-        if: inputs.operation == 'verify-anonymous'
-        run: python3 publication/verify_registry.py anonymous
-      - name: Retain non-secret registry identity receipt
+          mkdir -p qualification-results
+          docker pull "$ORIGINAL"
+          docker build --network none --pull=false --tag "$CANDIDATE" --file qualification/rc3-init-startup/Dockerfile.candidate qualification/rc3-init-startup
+          python3 qualification/rc3-init-startup/compare_images.py --original "$ORIGINAL" --candidate "$CANDIDATE" --output qualification-results
+      - name: Qualify genuine default startup and shutdown with synthetic data
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 240s python3 qualification/rc3-init-startup/fixtures/qualify.py --original "$ORIGINAL" --candidate "$CANDIDATE" --output qualification-results/STARTUP_QUALIFICATION.json
+      - name: Export and bind qualified candidate without publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker image save "$CANDIDATE" | gzip -n > qualification-results/candidate-image.tar.gz
+          python3 qualification/rc3-init-startup/seal_export.py --export qualification-results/candidate-image.tar.gz --results qualification-results
+      - name: Retain qualification receipts and exact candidate export
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: registry-identity-${{ inputs.operation }}
-          path: registry-identity.json
+          name: rc3-init-startup-qualification-${{ github.run_id }}
+          path: |
+            qualification-results/*.json
+            qualification-results/EXPORT_SHA256.txt
+            qualification-results/candidate-image.tar.gz
           if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
