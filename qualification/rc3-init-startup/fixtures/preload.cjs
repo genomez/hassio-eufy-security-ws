@@ -73,9 +73,15 @@ syncBuiltinESMExports();
 mark('preloadEntered');
 assert(fs.statSync('/run/s6/container_environment').isDirectory());
 mark('s6EnvironmentPresent');
+const expectedStartup = JSON.parse(fs.readFileSync('/qualification/EXPECTED_STARTUP.json', 'utf8'));
+assert.equal(typeof expectedStartup.launcherSha256, 'string');
+assert(/^[0-9a-f]{64}$/.test(expectedStartup.launcherSha256));
 assert.equal(createHash('sha256').update(fs.readFileSync('/run.sh')).digest('hex'),
-  'a578fac58776b26c30ca8f3597758705a09dffbba7584e1ffa19c4424f8212b1');
+  expectedStartup.launcherSha256);
 mark('launcherBytesVerified');
+assert(['corrected-synthetic', 'corrected-route-unavailable'].includes(process.env.QUALIFICATION_CASE));
+assert.equal(process.env.RTC_BIND_ADDRESS, undefined);
+mark('optionalDiscoveryFallbackVerified');
 assert.deepEqual(process.argv.slice(1), [
   '/usr/src/app/node_modules/eufy-security-ws/dist/bin/server.js',
   '--host', '0.0.0.0', '--config', '/data/eufy-security-ws-config.json',
@@ -101,7 +107,11 @@ EufySecurity.initialize = async config => {
   assert.equal(config.pollingIntervalMinutes, 15);
   assert.equal(config.trustedDeviceName, 'isolated-startup-qualification');
   assert.equal(config.acceptInvitations, undefined);
-  assert.equal(config.stationIPAddresses, undefined);
+  if (process.env.QUALIFICATION_CASE === 'corrected-route-unavailable') {
+    assert.deepEqual(config.stationIPAddresses, {SYNTHETIC_STATION: '192.0.2.1'});
+  } else {
+    assert.equal(config.stationIPAddresses, undefined);
+  }
   mark('launcherConfigVerified');
   mark('fakeInitialize');
   const driver = new EventEmitter();

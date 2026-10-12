@@ -13,6 +13,7 @@ MISSING = 'Required parameters username and/or password not set. Starting aborte
 ENVDIR = '/run/s6/container_environment'
 CLI = '/usr/src/app/node_modules/eufy-security-ws/dist/bin/server.js'
 ALLOWED = {'preloadEntered', 's6EnvironmentPresent', 'launcherBytesVerified', 'actualCliArgvVerified',
+           'optionalDiscoveryFallbackVerified',
            'rtcDefaultsVerified', 'launcherConfigVerified', 'fakeInitialize',
            'fakeMegaLogin', 'fakeConnect', 'serverListening', 'readyForStop',
            'sigtermObserved', 'driverClose', 'serverClosed', 'blockedOperation'}
@@ -30,6 +31,7 @@ FAILURE_MARKERS = {
     'original_image_not_fixed_digest', 'corrected_image_equals_original',
     'image_identity_not_digest',
     'shell_diagnostic_schema',
+    'rtc_binding_override_present',
 }
 
 
@@ -161,7 +163,8 @@ def run_case(image, mode, fixtures, root):
     name = 'rc3-init-qualification-' + uuid.uuid4().hex
     data = root / mode
     data.mkdir()
-    options = {} if mode != 'corrected-synthetic' else {
+    synthetic_case = mode in ('corrected-synthetic', 'corrected-route-unavailable')
+    options = {} if not synthetic_case else {
         'username': 'qualification@example.invalid',
         'password': 'synthetic-only-no-authentication', 'country': 'FR',
         'event_duration': 10, 'polling_interval': 15,
@@ -169,6 +172,8 @@ def run_case(image, mode, fixtures, root):
         'accept_invitations': False, 'stations': [], 'debug': False,
         'ipv4first': False, 'rtc_app_live_view_test': False,
     }
+    if mode == 'corrected-route-unavailable':
+        options['stations'] = [{'serial_number': 'SYNTHETIC_STATION', 'ip_address': '192.0.2.1'}]
     (data / 'options.json').write_text(json.dumps(options))
     # Pinned genuine Bashio reads this documented internal cache key before its
     # Supervisor request. Supply synthetic input, never a Supervisor token/stub.
@@ -183,6 +188,7 @@ def run_case(image, mode, fixtures, root):
                '--mount', f'type=bind,src={data},dst=/data',
                '--env', 'NODE_OPTIONS=--require=/qualification/preload.cjs',
                '--env', 'BASH_ENV=/qualification/shell-diagnostic.sh',
+               '--env', f'QUALIFICATION_CASE={mode}',
                '--env', 'CACHE_DIR=/data/bashio-cache', image)
         created = True
         definition = inspect(name)
@@ -195,9 +201,13 @@ def run_case(image, mode, fixtures, root):
                 'default_process_mismatch')
         require(definition['HostConfig']['NetworkMode'] == 'none', 'network_not_none')
         require(not definition['HostConfig']['Privileged'], 'privileged_container')
+        if mode != 'original-empty':
+            require(not any(value.startswith('RTC_BIND_ADDRESS=')
+                            for value in definition['Config'].get('Env', [])),
+                    'rtc_binding_override_present')
         docker('start', name)
         deadline = time.monotonic() + 40
-        if mode == 'corrected-synthetic':
+        if synthetic_case:
             while time.monotonic() < deadline:
                 evidence = read_trace(data)
                 if evidence and 'readyForStop' in evidence['trace']:
@@ -238,6 +248,7 @@ def run_case(image, mode, fixtures, root):
                 'defaultPath': definition['Path'], 'defaultArgs': definition['Args'],
                 'networkMode': 'none', 'trace': evidence['trace'] if evidence else [],
                 'syntheticBashioCacheInput': True,
+                'rtcBindingFixtureOverride': False,
                 'startupMarkers': startup_markers(logs), 'oomKilled': state['OOMKilled'],
                 'shellDiagnostic': read_shell_diagnostic(data),
                 'rawLogsOmitted': True, 'forcedTermination': False}
@@ -267,7 +278,8 @@ def main():
             root = pathlib.Path(directory)
             for image, mode in [(args.original, 'original-empty'),
                                 (args.candidate, 'corrected-empty'),
-                                (args.candidate, 'corrected-synthetic')]:
+                                (args.candidate, 'corrected-synthetic'),
+                                (args.candidate, 'corrected-route-unavailable')]:
                 CURRENT_CASE = mode
                 results.append(run_case(image, mode, fixtures, root))
     except Exception as error:

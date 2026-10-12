@@ -1,0 +1,12 @@
+{
+  "launcherSha256": "0848647298e5b8b2e6eaf78910885560fc66614652070f680e51fe4a0ff18039",
+  "parentLauncherSha256": "a578fac58776b26c30ca8f3597758705a09dffbba7584e1ffa19c4424f8212b1",
+  "changedSourceLines": [
+    88,
+    95
+  ],
+  "onlyFilesystemChange": "/run.sh",
+  "reason": "Allow failed optional address discovery without disabling Bashio error handling",
+  "containerNetwork": "none",
+  "realAuthTested": false
+}

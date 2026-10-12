@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Pull the exact public parent and build configuration-only correction
+      - name: Pull the exact public parent and build startup-only correction
         shell: bash
         run: |
           set -euo pipefail

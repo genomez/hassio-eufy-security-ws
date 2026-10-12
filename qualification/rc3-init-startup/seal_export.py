@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import io
 from pathlib import Path
 import tarfile
 
@@ -11,6 +12,7 @@ parser.add_argument("--results", required=True)
 args = parser.parse_args()
 archive_path, output = Path(args.export), Path(args.results)
 expected = json.loads((Path(__file__).parent / "EXPECTED_PARENT.json").read_text())
+startup_expected = json.loads((Path(__file__).parent / "EXPECTED_STARTUP.json").read_text())
 comparison = json.loads((output / "IMAGE_COMPARISON.json").read_text())
 startup = json.loads((output / "STARTUP_QUALIFICATION.json").read_text())
 assert comparison["passed"] and startup["passed"]
@@ -27,13 +29,30 @@ with tarfile.open(archive_path, "r:gz") as archive:
     assert config["config"]["Entrypoint"] == ["/init"]
     assert config["config"]["Cmd"] == ["/run.sh"]
     assert config["config"]["Labels"]["org.opencontainers.image.version"] == expected["candidateVersion"]
-    assert config["rootfs"]["diff_ids"] == expected["diffIds"]
-    assert len(manifest["Layers"]) == len(expected["diffIds"])
-    for layer, digest in zip(manifest["Layers"], expected["diffIds"]):
+    diffs = config["rootfs"]["diff_ids"]
+    assert diffs == comparison["diffIds"]
+    assert diffs[:-1] == expected["diffIds"]
+    assert len(manifest["Layers"]) == len(expected["diffIds"]) + 1 == len(diffs)
+    for layer, digest in zip(manifest["Layers"], diffs):
         assert "sha256:" + hashlib.file_digest(archive.extractfile(layer), "sha256").hexdigest() == digest
+    delta_bytes = archive.extractfile(manifest["Layers"][-1]).read()
+    with tarfile.open(fileobj=io.BytesIO(delta_bytes), mode="r:*") as delta:
+        files = []
+        for member in delta:
+            path = member.name.removeprefix("./").lstrip("/")
+            if member.isdir():
+                assert path in ("", ".")
+                continue
+            assert member.isfile() and path == "run.sh"
+            assert member.mode & 0o777 == 0o755
+            assert member.uid == member.gid == 0
+            raw = delta.extractfile(member).read()
+            assert hashlib.sha256(raw).hexdigest() == startup_expected["launcherSha256"]
+            files.append("/" + path)
+        assert files == ["/run.sh"], "Unexpected added filesystem content"
     tested_ids = {case["imageId"] for case in startup["cases"] if case["case"].startswith("corrected-")}
     assert tested_ids and len(tested_ids) == 1
-    assert len(startup["cases"]) == 3
+    assert len(startup["cases"]) == 4
     def bind_identity(ident):
         # Classic inspect/container IDs can be config digests; containerd can
         # report an OCI target. Accept a target only when this archive binds it
@@ -52,7 +71,9 @@ with tarfile.open(archive_path, "r:gz") as archive:
 receipt = {"passed": True, "version": expected["candidateVersion"], "platform": "linux/amd64",
            "configDigest": config_digest, "inspectId": comparison["candidateInspectId"],
            "exportSha256": export_sha, "entrypoint": ["/init"], "cmd": ["/run.sh"],
-           "diffIds": expected["diffIds"], "allExportLayerDiffIdsVerified": True,
+           "diffIds": diffs, "allExportLayerDiffIdsVerified": True,
+           "parentFilesystemLayersRetained": True, "onlyFilesystemChange": "/run.sh",
+           "launcherSha256": startup_expected["launcherSha256"], "launcherChangedSourceLines": [88, 95],
            "parentManifest": expected["parentManifest"], "registryManifest": None,
            "testedContainerImageIds": sorted(tested_ids), "exportBoundToTestedImage": True,
            "registryPublished": False, "realAuthenticationTested": False,

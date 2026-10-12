@@ -1,4 +1,4 @@
-"""Assert a configuration-only derivative; do not execute either image."""
+"""Assert the allowed startup-only derivative; do not execute either image."""
 import argparse
 import copy
 import json
@@ -25,7 +25,9 @@ assert old["Os"] == new["Os"] == "linux"
 assert old["Config"].get("Entrypoint") in (None, [])
 assert new["Config"]["Entrypoint"] == ["/init"]
 assert old["Config"]["Cmd"] == new["Config"]["Cmd"] == ["/run.sh"]
-assert old["RootFS"]["Layers"] == new["RootFS"]["Layers"] == expected["diffIds"]
+assert old["RootFS"]["Layers"] == expected["diffIds"]
+assert new["RootFS"]["Layers"][:-1] == expected["diffIds"]
+assert len(new["RootFS"]["Layers"]) == len(expected["diffIds"]) + 1
 assert old["Config"]["Labels"]["org.opencontainers.image.version"] == expected["parentVersion"]
 assert new["Config"]["Labels"]["org.opencontainers.image.version"] == expected["candidateVersion"]
 old_config = copy.deepcopy(old["Config"])
@@ -39,8 +41,9 @@ receipt = {"passed": True, "parentManifest": expected["parentManifest"],
            "parentConfig": expected["parentConfig"], "originalInspectId": old["Id"],
            "candidateInspectId": new["Id"], "candidateVersion": expected["candidateVersion"],
            "entrypoint": new["Config"]["Entrypoint"], "cmd": new["Config"]["Cmd"],
-           "diffIds": new["RootFS"]["Layers"], "filesystemLayersIdentical": True,
+           "diffIds": new["RootFS"]["Layers"], "parentFilesystemLayersRetained": True,
+           "addedFilesystemLayers": 1, "allowedFilesystemChange": "/run.sh",
            "onlyRuntimeConfigChanges": ["Entrypoint", "Labels.org.opencontainers.image.version"],
            "registryPublished": False}
 (output / "IMAGE_COMPARISON.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-print(json.dumps({"passed": True, "filesystemLayersIdentical": True, "entrypoint": ["/init"]}))
+print(json.dumps({"passed": True, "parentFilesystemLayersRetained": True, "allowedFilesystemChange": "/run.sh", "entrypoint": ["/init"]}))

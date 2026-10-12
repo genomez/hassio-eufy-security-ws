@@ -6,18 +6,23 @@ publish an image or authorize another reporter start.
 
 Run `python3 fixtures/qualify.py --original <fixed-public-digest-reference>
 --candidate <local-corrected-image> --output startup-results.json` after deriving the corrected image from the fixed
-public immutable original. The runner must independently verify image metadata
-and identical root filesystem layers before these checks.
+public immutable original. The runner must independently verify image metadata,
+the original base layers and the sole corrected-launcher layer before these checks.
 
 Every test uses its image's original default process with no command or
 entrypoint override. The original is expected to fail with envdir exit111. The
 corrected empty options case must reach the launcher's existing missing-option
-message and never launch Node. The synthetic case runs genuine /init,
-with-contenv, Bashio, the unchanged /run.sh and installed Node CLI. NODE_OPTIONS
+message and never launch Node. Both synthetic cases run genuine /init,
+with-contenv, Bashio, the corrected /run.sh and unchanged installed Node CLI. NODE_OPTIONS
 adds a qualification boundary preload, replacing only EufySecurity.initialize
-with a synthetic EventEmitter driver. The installed launcher SHA256, configuration,
-RTC defaults, listening,
-readiness and graceful stop are checked without hardware or real auth.
+with a synthetic EventEmitter driver. The installed launcher SHA256 must match
+`EXPECTED_STARTUP.json` field `launcherSha256` supplied by the parent image verifier.
+Configuration, RTC defaults, listening, readiness and graceful stop are checked
+without hardware or real auth. The fourth case supplies only reserved station
+`SYNTHETIC_STATION` at `192.0.2.1` to exercise an unavailable route under network
+none. Neither synthetic case injects RTC_BIND_ADDRESS; both require it to remain
+unset after optional route/hostname discovery fails. The corrected empty case's
+container environment is also checked for absence of a binding override.
 
 Containers have network mode none, no published ports, a read-only fixture mount,
 and fresh temporary /data containing synthetic options and test receipts only.
