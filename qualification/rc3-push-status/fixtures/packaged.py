@@ -3,7 +3,7 @@ import json
 import pathlib
 import re
 import subprocess
-import tempfile
+from owned_temp import temporary_data
 import time
 import uuid
 
@@ -25,8 +25,7 @@ def require(condition, marker):
 
 
 def run_packaged(image, fixtures, output):
-    with tempfile.TemporaryDirectory(prefix='rc3-push-compiled-') as directory:
-        root = pathlib.Path(directory)
+    with temporary_data('rc3-push-compiled-', output / 'PACKAGED_TEMP_CLEANUP.json') as root:
         for mode, count, filename in [('push', 20, 'PACKAGED_PUSH_STATUS.json'),
                                       ('retry', 34, 'PACKAGED_LOGIN_RETRY.json')]:
             name = 'rc3-push-compiled-' + uuid.uuid4().hex

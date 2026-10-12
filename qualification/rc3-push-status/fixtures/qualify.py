@@ -4,7 +4,7 @@ import json
 import pathlib
 import re
 import subprocess
-import tempfile
+from owned_temp import temporary_data
 import time
 import uuid
 
@@ -18,6 +18,7 @@ ALLOWED = {'preloadEntered', 's6EnvironmentPresent', 'launcherBytesVerified', 'a
            'fakeMegaLogin', 'fakeConnect', 'serverListening', 'readyForStop',
            'sigtermObserved', 'driverClose', 'serverClosed', 'blockedOperation'}
 CURRENT_CASE = 'not_started'
+CURRENT_PHASE = 'startup'
 FAILURE_MARKERS = {
     'docker_operation_failed', 'trace_schema', 'trace_marker_not_allowlisted',
     'default_process_mismatch', 'network_not_none', 'privileged_container',
@@ -32,6 +33,9 @@ FAILURE_MARKERS = {
     'image_identity_not_digest',
     'shell_diagnostic_schema',
     'rtc_binding_override_present',
+    'synthetic_temp_scope_invalid',
+    'synthetic_temp_ownership_repair_failed',
+    'synthetic_temp_cleanup_failed',
 }
 
 
@@ -259,7 +263,7 @@ def run_case(image, mode, fixtures, root):
 
 
 def main():
-    global CURRENT_CASE
+    global CURRENT_CASE, CURRENT_PHASE
     parser = argparse.ArgumentParser()
     parser.add_argument('--original', required=True)
     parser.add_argument('--candidate', required=True)
@@ -273,8 +277,7 @@ def main():
     fixtures = pathlib.Path(__file__).resolve().parent
     results = []
     try:
-        with tempfile.TemporaryDirectory(prefix='rc3-init-synthetic-') as directory:
-            root = pathlib.Path(directory)
+        with temporary_data('rc3-init-synthetic-', output_dir / 'STARTUP_TEMP_CLEANUP.json') as root:
             for image, mode in [(args.original, 'parent-empty'),
                                 (args.candidate, 'corrected-empty'),
                                 (args.candidate, 'corrected-synthetic'),
@@ -297,6 +300,8 @@ def main():
                'realDefaultEntrypoint': True, 'realLauncherAndCli': True,
                'realCloudAuthentication': False, 'productionAccess': False}
     args.output.write_text(json.dumps(receipt, indent=2) + '\n')
+    CURRENT_PHASE = 'packaged-runtime'
+    CURRENT_CASE = 'packaged-runtime'
     from packaged import run_packaged
     run_packaged(args.candidate, fixtures, output_dir)
     print(json.dumps({'status': 'passed', 'startupCases': len(results), 'pushCases': 20, 'retryCases': 34}))
@@ -308,5 +313,5 @@ if __name__ == '__main__':
     except Exception as error:
         # Docker errors/logs or assertion values are never forwarded into receipts.
         print(json.dumps({'status': 'failed', 'errorType': type(error).__name__,
-                          'case': CURRENT_CASE, 'failureMarker': failure_marker(error)}))
+                          'case': CURRENT_CASE, 'phase': CURRENT_PHASE, 'failureMarker': failure_marker(error)}))
         raise SystemExit(1)

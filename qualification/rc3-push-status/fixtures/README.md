@@ -44,3 +44,14 @@ Raw container/Jest output is not emitted or retained in artifacts. Fixed result
 counts, failed-case ordinals, allowlisted startup markers and installed module
 SHA-256 values are the only diagnostic receipts. There is no install, build,
 network dependency resolution, production access or reporter trial here.
+
+Hosted cleanup records STARTUP_TEMP_CLEANUP.json and PACKAGED_TEMP_CLEANUP.json.
+Failed cases preserve their temporary data for disposable-runner teardown. For
+completed cases only, ordinary standard-library cleanup runs first. If a
+container-root cache prevents it, the helper verifies the exact allocated real
+directory and inode, its runner ownership, fixed prefix and direct `/tmp` parent.
+It then runs `sudo -n chown -R -P -h -- <numeric UID:GID> <exact root>` using an
+argv array, captured output and a 20-second bound before retrying cleanup. It
+never follows symlinks or touches a directory outside that allocated temp root.
+Ownership-repair or cleanup failure preserves remaining data and emits only a
+fixed phase marker. No Docker force removal or SIGKILL is introduced.
