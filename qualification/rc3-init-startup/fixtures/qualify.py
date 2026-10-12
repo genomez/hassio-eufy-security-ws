@@ -62,6 +62,81 @@ def read_trace(data):
     return result
 
 
+def failure_marker(error):
+    marker = str(error) if isinstance(error, (AssertionError, RuntimeError)) else None
+    return marker if marker in FAILURE_MARKERS else 'unclassified_fixture_failure'
+
+
+def startup_markers(logs):
+    """Fixed observations only: no arbitrary text, matches, paths or credentials."""
+    lowered = logs.lower()
+    return {
+        'launcherMissingCredentialsMessage': MISSING in logs,
+        's6EnvironmentDirectoryMention': ENVDIR in logs,
+        's6EnvdirFatalMention': 's6-envdir: fatal:' in lowered,
+        's6Stage2FailureMention': bool(re.search(r'stage\s*2[^\n]*(?:fail|error)', lowered)),
+        's6ServiceFailureMention': bool(re.search(r'(?:s6-rc|s6-supervise|s6-svscan)[^\n]*(?:fail|fatal|error|unable)', lowered)),
+        'serviceCommandExitMention': 'command exited' in lowered,
+        's6FatalMention': bool(re.search(r's6[-\w]*:\s*fatal:', lowered)),
+        'legacyContInitFailureMention': bool(re.search(r'legacy-cont-init[^\n]*(?:fail|error)', lowered)),
+        'fixAttrsFailureMention': bool(re.search(r'fix-attrs[^\n]*(?:fail|error)', lowered)),
+        'bashioMention': 'bashio' in lowered,
+        'bashioFailureMention': bool(re.search(r'bashio[^\n]*(?:fatal|error|fail)', lowered)),
+        'optionsFileMention': '/data/options.json' in logs,
+        'configFailureMention': bool(re.search(r'(?:options|configuration|config)[^\n]*(?:not found|missing|error|fail)', lowered)),
+        'supervisorTokenMention': 'SUPERVISOR_TOKEN' in logs,
+        'supervisorTokenRequiredMention': bool(re.search(r'supervisor_token[^\n]*(?:not set|missing|required|not defined|not found)', lowered)) or 'no supervisor_token' in lowered,
+        'supervisorConnectionFailureMention': bool(re.search(r'supervisor[^\n]*(?:connect|refused|unreachable|fail|error)', lowered)),
+        'supervisorRequestFailureMention': bool(re.search(r'(?:supervisor|/addons/self/options/config)[^\n]*(?:request|curl|fail|error|missing|unable)', lowered)),
+        'supervisorOptionsEndpointMention': '/addons/self/options/config' in logs,
+        'curlFailureMention': bool(re.search(r'curl[^\n]*(?:error|fail|could not|couldn.t|unable|\([0-9]+\))', lowered)),
+        'hostnameInvalidOptionMention': bool(re.search(r'hostname[^\n]*(?:invalid|unrecognized|unknown|illegal)[^\n]*option', lowered)),
+        'permissionDeniedMention': 'permission denied' in lowered,
+        'missingFileMention': 'no such file or directory' in lowered,
+        'commandNotFoundMention': 'command not found' in lowered,
+        'nodeAssertionMention': 'AssertionError' in logs,
+        'nodeModuleMissingMention': 'MODULE_NOT_FOUND' in logs or 'ERR_MODULE_NOT_FOUND' in logs,
+        'nodeDriverStartFailureMention': 'Unable to start driver' in logs,
+        'nodeServerStartFailureMention': 'Unable to start Server' in logs,
+        'nodeVersionBannerMention': 'Node.js v' in logs,
+        'offlineGuardFailureMention': 'QUALIFICATION_OPERATION_DENIED:' in logs,
+    }
+
+
+def failed_case_receipt(name, mode, data, error, created):
+    result = {'case': mode, 'passed': False, 'failureMarker': failure_marker(error),
+              'errorType': type(error).__name__, 'rawLogsOmitted': True,
+              'syntheticBashioCacheInput': True,
+              'exitCode': None, 'oomKilled': None, 'running': None,
+              'imageId': None, 'defaultPath': None, 'defaultArgs': None,
+              'trace': [], 'startupMarkers': startup_markers('')}
+    result['forcedTermination'] = None
+    if created:
+        try:
+            current = inspect(name)
+            state = current['State']
+            result['exitCode'] = state['ExitCode'] if type(state.get('ExitCode')) is int else None
+            result['oomKilled'] = state['OOMKilled'] if type(state.get('OOMKilled')) is bool else None
+            result['running'] = state['Running'] if type(state.get('Running')) is bool else None
+            image_id = current.get('Image')
+            if isinstance(image_id, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image_id):
+                result['imageId'] = image_id
+            if current.get('Path') in ('/init', '/run.sh'):
+                result['defaultPath'] = current['Path']
+            if current.get('Args') in ([], ['/run.sh']):
+                result['defaultArgs'] = current['Args']
+            result['startupMarkers'] = startup_markers(docker('logs', name, combine_logs=True))
+        except Exception:
+            result['diagnosticReadFailed'] = True
+    try:
+        trace = read_trace(data)
+        if trace:
+            result['trace'] = trace['trace']
+    except Exception:
+        result['traceReadFailed'] = True
+    return result
+
+
 def run_case(image, mode, fixtures, root):
     name = 'rc3-init-qualification-' + uuid.uuid4().hex
     data = root / mode
@@ -75,13 +150,19 @@ def run_case(image, mode, fixtures, root):
         'ipv4first': False, 'rtc_app_live_view_test': False,
     }
     (data / 'options.json').write_text(json.dumps(options))
+    # Pinned genuine Bashio reads this documented internal cache key before its
+    # Supervisor request. Supply synthetic input, never a Supervisor token/stub.
+    cache = data / 'bashio-cache'
+    cache.mkdir()
+    (cache / 'addons.self.options.config.cache').write_text(json.dumps(options))
     created = False
     try:
         # No command, --entrypoint, host port, socket, auth environment or Supervisor mount.
         docker('create', '--name', name, '--platform', 'linux/amd64', '--network', 'none',
                '--mount', f'type=bind,src={fixtures},dst=/qualification,readonly',
                '--mount', f'type=bind,src={data},dst=/data',
-               '--env', 'NODE_OPTIONS=--require=/qualification/preload.cjs', image)
+               '--env', 'NODE_OPTIONS=--require=/qualification/preload.cjs',
+               '--env', 'CACHE_DIR=/data/bashio-cache', image)
         created = True
         definition = inspect(name)
         require(isinstance(definition['Image'], str)
@@ -135,7 +216,12 @@ def run_case(image, mode, fixtures, root):
                 'imageId': definition['Image'],
                 'defaultPath': definition['Path'], 'defaultArgs': definition['Args'],
                 'networkMode': 'none', 'trace': evidence['trace'] if evidence else [],
+                'syntheticBashioCacheInput': True,
+                'startupMarkers': startup_markers(logs), 'oomKilled': state['OOMKilled'],
                 'rawLogsOmitted': True, 'forcedTermination': False}
+    except Exception as error:
+        error.safe_receipt = failed_case_receipt(name, mode, data, error, created)
+        raise
     finally:
         if created:
             # Never forcibly remove a running container: preserve failed live evidence.
@@ -154,13 +240,25 @@ def main():
     require(args.candidate != ORIGINAL, 'corrected_image_equals_original')
     fixtures = pathlib.Path(__file__).resolve().parent
     results = []
-    with tempfile.TemporaryDirectory(prefix='rc3-init-synthetic-') as directory:
-        root = pathlib.Path(directory)
-        for image, mode in [(args.original, 'original-empty'),
-                            (args.candidate, 'corrected-empty'),
-                            (args.candidate, 'corrected-synthetic')]:
-            CURRENT_CASE = mode
-            results.append(run_case(image, mode, fixtures, root))
+    try:
+        with tempfile.TemporaryDirectory(prefix='rc3-init-synthetic-') as directory:
+            root = pathlib.Path(directory)
+            for image, mode in [(args.original, 'original-empty'),
+                                (args.candidate, 'corrected-empty'),
+                                (args.candidate, 'corrected-synthetic')]:
+                CURRENT_CASE = mode
+                results.append(run_case(image, mode, fixtures, root))
+    except Exception as error:
+        if hasattr(error, 'safe_receipt'):
+            results.append(error.safe_receipt)
+        args.output.write_text(json.dumps({
+            'schema': 1, 'passed': False, 'originalImage': ORIGINAL,
+            'correctedImage': args.candidate, 'cases': results,
+            'failureMarker': failure_marker(error), 'errorType': type(error).__name__,
+            'rawLogsOmitted': True, 'realCloudAuthentication': False,
+            'productionAccess': False,
+        }, indent=2) + '\n')
+        raise
     receipt = {'schema': 1, 'passed': True, 'originalImage': ORIGINAL,
                'correctedImage': args.candidate, 'cases': results,
                'realDefaultEntrypoint': True, 'realLauncherAndCli': True,
@@ -174,9 +272,6 @@ if __name__ == '__main__':
         main()
     except Exception as error:
         # Docker errors/logs or assertion values are never forwarded into receipts.
-        failure_marker = str(error) if isinstance(error, (AssertionError, RuntimeError)) else None
-        if failure_marker not in FAILURE_MARKERS:
-            failure_marker = 'unclassified_fixture_failure'
         print(json.dumps({'status': 'failed', 'errorType': type(error).__name__,
-                          'case': CURRENT_CASE, 'failureMarker': failure_marker}))
+                          'case': CURRENT_CASE, 'failureMarker': failure_marker(error)}))
         raise SystemExit(1)

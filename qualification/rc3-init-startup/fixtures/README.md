@@ -20,7 +20,15 @@ RTC defaults, listening,
 readiness and graceful stop are checked without hardware or real auth.
 
 Containers have network mode none, no published ports, a read-only fixture mount,
-and fresh temporary /data containing synthetic options only. No host secret or
+and fresh temporary /data containing synthetic options and test receipts only.
+Pinned Bashio 0.19 obtains configuration through its cache key
+`addons.self.options.config`: each case seeds raw synthetic JSON in
+`/data/bashio-cache/addons.self.options.config.cache` and passes
+`CACHE_DIR=/data/bashio-cache`. The real, unchanged Bashio cache/config functions
+consume that input without contacting Supervisor. `/data/options.json` retains
+the same synthetic options for provenance; Bashio does not consume that file.
+There is no Supervisor token, mock API or replaced Bashio function.
+No host secret or
 authentication environment, Docker socket, Supervisor API, privileged mode,
 host PID or host network is passed into a container. The Node boundary blocks
 outbound HTTP/TLS/DNS/sockets/datagrams/fetch, workers and subprocesses. Only the
@@ -32,6 +40,9 @@ SIGKILL. A failed running container is never forcibly removed. Receipts include
 only fixed diagnostic markers, process paths/args, canonical tested-container image
 IDs and public image references;
 raw container logs and generated synthetic options stay out of output.
+Failed cases write partial receipts preserving successful prior cases, actual
+exit/OOM/running state and allowlisted trace/log marker observations. Marker flags
+are substring/category observations, not a diagnosis or full log context.
 
 Passing these checks establishes startup and shutdown in isolation. It does not
 establish real authentication retry, RTC session health or FLC/device behavior.
