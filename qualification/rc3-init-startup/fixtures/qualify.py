@@ -29,6 +29,7 @@ FAILURE_MARKERS = {
     'required_trace_missing_or_repeated', 'shutdown_trace_order',
     'original_image_not_fixed_digest', 'corrected_image_equals_original',
     'image_identity_not_digest',
+    'shell_diagnostic_schema',
 }
 
 
@@ -65,6 +66,20 @@ def read_trace(data):
 def failure_marker(error):
     marker = str(error) if isinstance(error, (AssertionError, RuntimeError)) else None
     return marker if marker in FAILURE_MARKERS else 'unclassified_fixture_failure'
+
+
+def read_shell_diagnostic(data):
+    target = data / 'qualification-shell-diagnostic.json'
+    if not target.exists():
+        return None
+    result = json.loads(target.read_text())
+    require(set(result) == {'schema', 'exitCode', 'lineNumber', 'stage'}, 'shell_diagnostic_schema')
+    require(result['schema'] == 1 and type(result['exitCode']) is int
+            and 1 <= result['exitCode'] <= 255 and type(result['lineNumber']) is int
+            and result['lineNumber'] >= 0 and result['stage'] in {
+                'hostnameDiscovery', 'routeDiscovery', 'bashioConfiguration',
+                'jsonGeneration', 'unknown'}, 'shell_diagnostic_schema')
+    return result
 
 
 def startup_markers(logs):
@@ -109,7 +124,8 @@ def failed_case_receipt(name, mode, data, error, created):
               'syntheticBashioCacheInput': True,
               'exitCode': None, 'oomKilled': None, 'running': None,
               'imageId': None, 'defaultPath': None, 'defaultArgs': None,
-              'trace': [], 'startupMarkers': startup_markers('')}
+              'trace': [], 'startupMarkers': startup_markers(''),
+              'shellDiagnostic': None}
     result['forcedTermination'] = None
     if created:
         try:
@@ -134,6 +150,10 @@ def failed_case_receipt(name, mode, data, error, created):
             result['trace'] = trace['trace']
     except Exception:
         result['traceReadFailed'] = True
+    try:
+        result['shellDiagnostic'] = read_shell_diagnostic(data)
+    except Exception:
+        result['shellDiagnosticReadFailed'] = True
     return result
 
 
@@ -162,6 +182,7 @@ def run_case(image, mode, fixtures, root):
                '--mount', f'type=bind,src={fixtures},dst=/qualification,readonly',
                '--mount', f'type=bind,src={data},dst=/data',
                '--env', 'NODE_OPTIONS=--require=/qualification/preload.cjs',
+               '--env', 'BASH_ENV=/qualification/shell-diagnostic.sh',
                '--env', 'CACHE_DIR=/data/bashio-cache', image)
         created = True
         definition = inspect(name)
@@ -218,6 +239,7 @@ def run_case(image, mode, fixtures, root):
                 'networkMode': 'none', 'trace': evidence['trace'] if evidence else [],
                 'syntheticBashioCacheInput': True,
                 'startupMarkers': startup_markers(logs), 'oomKilled': state['OOMKilled'],
+                'shellDiagnostic': read_shell_diagnostic(data),
                 'rawLogsOmitted': True, 'forcedTermination': False}
     except Exception as error:
         error.safe_receipt = failed_case_receipt(name, mode, data, error, created)

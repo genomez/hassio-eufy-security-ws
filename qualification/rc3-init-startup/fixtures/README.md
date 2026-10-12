@@ -28,6 +28,11 @@ Pinned Bashio 0.19 obtains configuration through its cache key
 consume that input without contacting Supervisor. `/data/options.json` retains
 the same synthetic options for provenance; Bashio does not consume that file.
 There is no Supervisor token, mock API or replaced Bashio function.
+`BASH_ENV=/qualification/shell-diagnostic.sh` adds an ERR diagnostic trap to the
+genuine noninteractive shell. The trap preserves the original failing status and
+records only typed exit/line numbers and a fixed stage category. It never stores
+or prints BASH_COMMAND, options or credentials, and does not disable error handling
+or stub shell functions. Its input is on the existing read-only fixture mount.
 No host secret or
 authentication environment, Docker socket, Supervisor API, privileged mode,
 host PID or host network is passed into a container. The Node boundary blocks
