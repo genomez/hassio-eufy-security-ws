@@ -1,170 +1,94 @@
-# RC3 push-status-corrected login retry candidate (amd64)
+# RC3 startup-read coordination candidate (amd64)
 
-Version `3.0.18-regional-rtc-rc3-login-retry.3` is an experimental correction
-to the qualified `.2` image. Publication and this guide do not authorize
-installation, startup, authentication or another trial. The previous `.2`
-single-start allowance has been used. Keep the candidate stopped until the
-maintainer's complete issue #2 comment explicitly grants the conditional `.3`
-procedure below. Keep automatic updates/restarts, watchdog and start-on-boot
-disabled, and Test5 (`rtc_app_live_view_test`) false.
+This guide and image publication do not authorize installation, startup, authentication or another trial. The previous `.3` single-start allowance has been used. Keep the candidate stopped until the maintainer's complete issue #2 comment explicitly grants the conditional `.4` procedure below. Keep automatic updates/restarts, watchdog and start-on-boot disabled, and `rtc_app_live_view_test` false. A later conflicting instruction takes precedence.
 
-## Verified artifact identity
+The descriptor preserves the repository basename and selects the `.4` tag; it is not a digest-pinned Supervisor selector. Before a separately authorized start, require the full exact verified RepoDigest and image ID below.
 
-- Repository: `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64`.
-- Version: `3.0.18-regional-rtc-rc3-login-retry.3`.
-- Immutable registry manifest: `sha256:8cb3d1854beb428803be7e50dcd038faf4b24ed0bfe3c4e7d63b62cec2c67a57`.
-- Full RepoDigest: `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:8cb3d1854beb428803be7e50dcd038faf4b24ed0bfe3c4e7d63b62cec2c67a57`.
-- Configuration digest: `sha256:7804976f8005b424b912ac3721eac04441d42a5323c37fcc2b52b6179ff662d1`.
-- Platform: `linux/amd64`.
-- Qualified gzip export SHA-256: `20dcf91e6118a9e8f9eab4af6ec07e92ce0fd3f16eb5fa24f9bc427348082fcb`.
+I prepared `.4` before sending further trial instructions. Source review found overlapping producers for the same startup camera-info read. This candidate combines identical reads at each startup checkpoint, bounds pending camera-info work and retains a newer refresh when it arrives during an earlier request. Later periodic/FLC refresh purposes, existing ACK handling, watchdog/RTSP behavior, authentication retries and RTC/FLC defaults are preserved. ACK completion and property-data arrival remain separate observations.
 
-Authenticated publication verification and an independent anonymous immutable
-manifest read verified the configuration and every compressed/uncompressed
-layer against the exact qualified export.
-The descriptor preserves its repository basename and selects the `.3` tag;
-it is not a digest-pinned Supervisor selector.
+It also adds fixed legacy-push request categories and numeric HTTP/backend codes, plus fixed RTC command/channel/correlation/timing fields. Raw token, body and error context are omitted from these specific diagnostic paths. Other SDK logs are not generally safe to share. This does not establish the cause of `-1`, `-104` or `-114`, or guarantee that they disappear.
 
-Before any separately approved start, require the full exact RepoDigest and
-`linux/amd64`. Docker inspect `.Id` may be the configuration digest or manifest
-digest depending on the image store; accept only those verified full values
-together with the correct RepoDigest. A version label, short hash or display
-name is insufficient. Keep image verification local; never post raw inspect
-output or private recovery identities.
+The candidate passed four isolated default-startup cases, 20 compiled SDK/WebSocket push-status cases, 34 unchanged login-retry cases and 82 compiled SDK coordination/diagnostic cases. All 192 baseline compiler emissions reproduced the parent; the candidate has 198 emissions plus the same six runtime assets. It retains all eleven `.3` filesystem layers and adds one layer containing only the approved compiled changes. Launcher, dependencies and runtime defaults are unchanged. These synthetic checks do not validate real authentication, native RTC/FLC, notification delivery or Supervisor installation.
 
-## What changed and what was qualified
+Version: `3.0.18-regional-rtc-rc3-login-retry.4`, linux/amd64.
 
-The SDK getter describes push transport connectivity. Previously, connection
-events also depended on legacy cloud-registration results, and the push service
-emitted connect/close before updating its own connection flag. The correction
-makes those status paths agree and prevents delayed registration completions
-from publishing stale transport events. The existing legacy-register,
-legacy-check and Mega-register request order and login retry behavior remain.
-Backend work still follows its existing lifecycle; this does not cancel it or
-resolve other underlying credential/shutdown races.
+Image repository: `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64`.
 
-[Qualification run 38323568379](https://github.com/genomez/hassio-eufy-security-ws/actions/runs/38323568379)
-at commit `22a5d14c09fd291bcae204224acaeae618574e8c` passed four isolated
-default-startup cases, 20 cases exercising the installed compiled SDK/WebSocket
-push-status paths and 34 unchanged compiled login-retry regression cases.
-The startup cases covered the `.2` missing-credentials refusal, the `.3`
-missing-credentials refusal, synthetic CLI startup/shutdown and unavailable-route
-fallback startup/shutdown. Networking was disabled and application boundaries
-were synthetic.
+Configuration digest: `sha256:4f07c46b42d3d35e04adbd7101f05333cb4ac734a6be472ad5634a2d87dcf1e3`.
 
-Recompiling the unchanged source reproduced all 192 installed outputs byte for
-byte. All ten `.2` filesystem layers remain; one added layer changes five
-compiled files from only the two approved SDK modules. The `/init` entrypoint,
-launcher, dependencies and RTC/FLC source and defaults remain unchanged.
-Publication loads and pushes this exact tested export without rebuilding or
-starting it.
+Immutable registry manifest: `sha256:8e75f28d65f5a0e0c05aa04cdcf420ecc45d779c1326bab561aaef8248ed907f`.
 
-These checks do not establish real authentication, notification delivery,
-Supervisor integration, native RTC or physical FLC behavior. The correction
-does not repair or explain legacy `10003`, prove that startup negative
-acknowledgments are harmless, explain the third guard-related acknowledgment,
-or establish long-run reliability. Connected push transport is not proof that
-cloud registration succeeded or that a notification was delivered.
+Full RepoDigest: `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:8e75f28d65f5a0e0c05aa04cdcf420ecc45d779c1326bab561aaef8248ed907f`.
 
-## Preserve the existing slot and recovery
+Qualification: https://github.com/genomez/hassio-eufy-security-ws/actions/runs/38415872582
 
-Use only the existing `regional-rtc-stable-v1` repository entry and slot
-`2cc5798a_eufy_security_ws_customrepo`. Do not add a repository or install another
-instance. Slot, image template, option schema and permissions remain unchanged.
-Keep existing RTC/FLC settings: packet size 800, handoff 1, reconnect 270000 ms,
-answerer/default mode and property refresh 900000 ms. Do not invoke a heal or
-reset authentication. The maintainer's production stack is excluded.
+Authenticated publication verification and an independent anonymous immutable-manifest read verified the configuration and all twelve compressed/uncompressed layers against the exact sealed export. Configuration and registry manifest digests are different identities; do not substitute one for the other.
 
-Before an approved update, verify locally that the original stopped RC3 backup,
-matching data/options, retained original image and private original image
-reference/ID are available. Do not overwrite them with a `.1`, `.2` or `.3`
-backup. If recovery is missing or ambiguous, leave stopped and do not update.
-Never share credentials, PINs, tokens, backups, configuration/persistence files,
-raw requests/responses, authentication logs or private recovery records.
+Publication: https://github.com/genomez/hassio-eufy-security-ws/actions/runs/38418913719
 
-## Conditional update and one passive trial
+Only a separately posted maintainer comment authorizes this conditional procedure. Once that comment permits the new `.4` trial and all prerequisites pass, follow A through D without an additional correspondence round. Nothing in this guide reuses or extends the `.3` trial; no manual device/service commands are included.
 
-This section applies only after the maintainer's complete issue #2 comment
-explicitly authorizes it. It does not renew the earlier `.2` start allowance.
+## A. Update and verify while stopped
 
-### Update and verify while stopped
+1. Keep `.3` stopped. Keep automatic updates/restarts, watchdog and start-on-boot disabled, and `rtc_app_live_view_test` false. Preserve account data/options and existing RTC/FLC settings. Do not add a repository or install another instance.
+2. Verify locally that the existing original stopped RC3 recovery copy, matching data/options, retained original image and private original image reference/ID are available. Do not overwrite them with a later candidate copy. If recovery is missing or ambiguous, leave the slot stopped and do not update.
+3. Refresh only the existing repository entry on `regional-rtc-stable-v1`, then manually update only `2cc5798a_eufy_security_ws_customrepo` to `.4`. Preserve data/options; do not uninstall, rebuild, restore unrelated components or start it during preparation.
+4. Inspect only the candidate image's ID, OS, architecture and RepoDigests using the limited image-metadata format from the prior procedure. Require version `.4`, linux/amd64, the exact full published RepoDigest above, and full image ID matching the verified configuration or manifest digest as appropriate to the image store. A label or short prefix is insufficient. Do not share full inspection output, environment or account data.
+5. Confirm the page remains stopped and repeat the prior limited container-state check for this slot's two possible container names. A missing container is acceptable; any existing container must be stopped (`running=false`, status `exited` or `created`). A stopped older container is not evidence of a candidate mismatch; do not start to replace it.
 
-1. Reconfirm disabled automatic updates/restarts, watchdog and start-on-boot,
-   Test5 false, unchanged account data/options and available original recovery.
-2. Refresh only the existing repository entry, then manually update only the
-   existing slot to `.3`. Preserve data/options. Do not uninstall, rebuild,
-   restore unrelated components or start the add-on.
-3. Verify its page reports the full `.3` version. Inspect only the `.3` image
-   locally, requiring the exact verified RepoDigest, allowed full `.Id` and
-   `linux/amd64`. Do not substitute a label or short prefix.
-4. Confirm the page remains stopped. Inspect only
-   `app_2cc5798a_eufy_security_ws_customrepo` and
-   `addon_2cc5798a_eufy_security_ws_customrepo` for running/status. A missing
-   container is acceptable. Any existing container must be `running=false`,
-   with status `exited` or `created`. A stopped older container is not evidence
-   of an image mismatch; do not start to replace it.
+For step 4, inspect only fixed candidate metadata:
 
-If a prerequisite fails before updating, leave stopped and report only the
-failed check. If the update or a post-update identity/stopped-state check fails,
-stop and follow recovery below. If all checks pass and the maintainer has
-authorized this procedure, proceed directly to the one passive trial using the
-exact verification commands in that comment.
+```sh
+docker image inspect \
+  'ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64:3.0.18-regional-rtc-rc3-login-retry.4' \
+  --format 'ID={{.Id}} OS={{.Os}} ARCH={{.Architecture}} DIGESTS={{json .RepoDigests}}'
+```
 
-### One start, maximum ten minutes including startup
+For step 5 and final stopped-state confirmation:
 
-Have a ten-minute timer ready, press Start once and start the timer immediately.
-Never extend it for delayed login or handoff. No restart after an exit or second
-start is included. Stop immediately if elapsed time becomes uncertain.
+```sh
+docker container inspect \
+  --format '{{.Name}} running={{.State.Running}} status={{.State.Status}}' \
+  app_2cc5798a_eufy_security_ws_customrepo \
+  addon_2cc5798a_eufy_security_ws_customrepo
+```
 
-Observe initialization, login/HomeBase connection and approximate timing. The
-existing logic allows at most one fresh key-exchange/login retry after an initial
-`4404`. Do not reset authentication, delete persisted data, invoke a heal, enter
-verification/captcha, wake devices manually or exercise app live view.
+If a prerequisite fails before updating, do not update or start; report only the failed check. If the update or post-update identity/stopped-state checks fail, follow C. If the maintainer comment has granted this new trial and all checks pass, proceed directly to B without another correspondence round.
 
-Passively compare HA push-connected status with transport connection/close
-events and note backend warning timing. A legacy `10003` warning alone with
-live transport does not establish a transport failure. Observe naturally
-occurring RTC handoff, FLC/light synchronization and notifications only. If a
-suitable event does not occur, mark the observation untested; do not force a
-transition, reconnect or extend the trial. Do not change guard mode, toggle
-lights or issue any manual device/service command through HA or the official app.
+## B. One passive start, strictly less than ten minutes including startup
 
-Stop immediately for repeated `4404` after the one retry, verification/captcha
-or lockout, unexpected exit, explicit login/RTC startup failure, continued
-missing RTC credentials after startup completes, unexpected guard-mode change,
-or actual push/RTC/device/FLC disruption. Stop before interactive verification.
-Early startup waiting alone is not a failure diagnosis; no connection by the
-deadline remains a failed observation.
+Reconfirm A and prepare a visible 9:30 Stop prompt plus an independent ten-minute deadline alert. Alerts do not guarantee shutdown. Press Start once and begin elapsed timing immediately at that action. Never extend timing for delayed login or handoff. No restart after an exit or second start is included. Stop immediately if elapsed time becomes uncertain. If these safeguards cannot reliably be followed, do not begin.
 
-Initiate Stop at nine minutes thirty seconds, earlier if shutdown might take
-longer, so the add-on is fully stopped by the ten-minute hard limit even if all
-observations succeeded. Verify the page and limited container check show
-stopped. Leave a successful `.3` installed but stopped. Continued operation or
-another start requires a new maintainer decision.
+Observe initialization, login/HomeBase connection and approximate timing. Existing logic permits at most one fresh key-exchange/login retry after an initial `4404`. Do not reset authentication, delete persistence, invoke a heal, enter verification/captcha, manually wake devices or exercise app live view.
 
-### Recovery if update or trial fails
+Passively compare HA push-connected status with actual transport connection/close events. Note fixed legacy check/register categories and numeric HTTP/backend codes separately from Mega registration. Connected transport is not proof of successful registration or notification delivery. Missing transitions remain untested; do not force them or continue longer.
 
-Stop the existing slot and restore only that Eufy add-on from the original
-stopped RC3 backup, including its saved image and matching data/options. Do not
-broaden recovery to HA or unrelated components, uninstall/rebuild as a workaround
-or authenticate again to improve the result.
+The fixed messages are `RTC camera info coordination`, `RtcCommandBridge command ack` and `Legacy push request`. Observe camera-info event/reason/generation/pending/queued/trailing/elapsed fields and selected numeric ACK/correlation fields (`expectedCommandID`, `actualCommandID`, `expectedChannelID`, `actualChannelID`, `responseFlag`, `commandMatches`, `channelMatches`, `pendingCount`, `elapsedMs`, `returnCode`). ACK completion and camera-info payload arrival are separate observations. Do not paste log lines or raw response data; mark unavailable fields unavailable and preserve the existing logging configuration.
 
-Verify version `3.0.18-regional-rtc-rc3`, safeguards and stopped state. Compare
-the restored image's full ID with the private original record using the
-maintainer's limited image-inspection command. Repeat the limited container
-check: a missing container is acceptable; any existing container must remain
-stopped. A restore-success notification alone is insufficient. Supervisor
-restoration was source reviewed, not rehearsed on this installation.
-If verification fails, preserve recovery material, leave stopped and report
-only the failed check; no startup or authentication retry.
+Observe only natural RTC handoff and normal passive FLC synchronization. Do not change guard mode or toggle lights in HA or the official app. Do not issue manual device/service commands or manufacture a reconnect/notification. Preserve packet size 800, handoff 1, reconnect 270000 ms, answerer/default mode, property refresh 900000 ms and existing FLC settings.
 
-### One consolidated sanitized outcome
+Stop immediately for repeated `4404` after the single retry, verification/captcha/lockout, unexpected exit, explicit login/RTC startup failure, continued missing RTC credentials after startup completes, repeated negative ACKs after startup, unexpected reconnect loops, unexpected guard changes or actual push/RTC/device/FLC disruption. Early waiting alone is not a failure diagnosis. No connection by the deadline is a failed observation.
 
-After the newly authorized trial, report installation/identity match or failed
-check; initialization and login/HomeBase timing; whether the single `4404` retry
-occurred; push-status consistency and warning timing; natural handoff observed
-or unobserved; passive FLC observations; stop reason, measured total runtime,
-final stopped state, start count and confirmation of zero manual device actions;
-and recovery verification if needed. Include naturally observed notification
-delivery only if it occurred without manufacturing a test. No additional
-historical report is due before this procedure. Do not provide raw logs or
-authentication/recovery material.
+Initiate Stop by 9:30, earlier if shutdown might take longer, and confirm fully stopped strictly before ten minutes. Verify the page and limited container-state check. Failure to confirm stopped before ten minutes fails the safeguard; it never permits continued observation, another start or an authentication/recovery attempt during the timed trial. Leave a successful `.4` installed but stopped. Continued operation needs a new owner decision.
+
+## C. Recovery if update or trial fails
+
+After confirming the slot is stopped, restore only this existing Eufy slot from its preserved original stopped RC3 recovery copy, including the saved image and matching data/options. If stopped state cannot be confirmed, preserve recovery material and report the failed check; do not restore a running slot. Do not broaden recovery to HA or unrelated components, uninstall/rebuild as a workaround or authenticate again to improve the result. The separately authorized procedure permits only that narrow post-stop fallback. It does not permit a further start, authentication attempt or unrelated recovery.
+
+Verify original version `3.0.18-regional-rtc-rc3`, safeguards and stopped state. Compare the restored full image ID with the private original record locally, and repeat the limited stopped-container check. A restore-success notification alone is insufficient. Restoration was source reviewed, not rehearsed on your installation. If verification fails, preserve recovery material, leave stopped and report only the failed check; do not start or retry authentication.
+
+Only locally, substitute the existing private original image reference:
+
+```sh
+docker image inspect 'YOUR_PRIVATE_SAVED_RC3_IMAGE_REFERENCE' --format '{{.Id}}'
+```
+
+## D. One consolidated sanitized outcome and next steps
+
+Report identity matched or failed check; startup/login/HomeBase timing and retry count; elapsed time when Stop was initiated and when stopped was confirmed; final stopped state, actual start count (zero if aborted before B, otherwise one) and zero manual commands; recovery verification if needed. Note natural handoffs and passive FLC observations. Missing transitions remain untested and must not be manufactured.
+
+Include only selected fixed fields, not log excerpts: camera-info event/reason/generation/pending/queued/trailing/elapsed values; negative ACK counts and numeric return codes, expected/actual command/channel, response flag and match booleans, pending count and elapsedMs; legacy push operation/category and finite HTTP/backend code or fixed error class. Separate startup from later recurrence. Image identity, numeric command metadata and fixed correlation fields are permitted; sensitive account/device/station identities and payloads are not.
+
+If bounded observations pass, leave `.4` installed but stopped. I will compare duplicate scheduling and command-correlated ACKs with `.3`, then review remaining legacy error classification. If they fail, follow C and remain stopped. Either outcome gets a source-backed next-step proposal; it does not authorize another start, a longer trial, forced notification/FLC tests or production rollout. No additional historical report is due before this procedure.
+
+Never share credentials, PINs, tokens, sensitive account/device identities, private recovery records, backups, configuration/persistence files, raw inspection output, raw requests/responses or authentication logs. No operation on my current production stack is involved.
