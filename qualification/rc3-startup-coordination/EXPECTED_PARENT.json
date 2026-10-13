@@ -703,5 +703,15 @@
       ],
       "actualCompiledWebSocket": false
     }
+  },
+  "parentBuildFileCount": 198,
+  "candidateBuildFileCount": 204,
+  "parentNonEmissionAssets": {
+    "mqtt/mqtt-eufy.crt": "0aa4014e6a34e2553b6258c671946620a44e03aedf0fde497781fe8a6abfd858",
+    "mqtt/proto/lock.proto": "46037508138640ba3b373a5111b78b0b45bbd49b359b01f9b71facecdefdebdb",
+    "push/proto/checkin.proto": "5fe6b36c117ed877fb6d46e634a71118c3cf2f7357588633ce9c24451d8d4616",
+    "push/proto/mcs.proto": "1d4827c7e2934225c8111d5b274b30a42b755b40482ebbb79718709817b38fe0",
+    "rtc/libsctp/libsctp_0_0_2.js": "c08934a1a57cc31f3d0cb8d12fa39c3d89bafc33de0d606fdeba5119f677225a",
+    "rtc/libsctp/libsctp_0_0_2.wasm": "52c12617f8b87c08d967402f3ff749e1e8913d5be878fa88940e11f5ccdd2421"
   }
 }

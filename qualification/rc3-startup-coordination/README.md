@@ -17,9 +17,14 @@ not reused as this candidate's frozen hashes.
 
 1. On the isolated hosted runner, build the `compiler` target. Its sole command
    runs with networking disabled, using only the parent's TypeScript 5.9.3 and
-   dependencies. All 192 baseline emissions must exactly reproduce the parent;
+   dependencies. The parent build has 198 files: 192 compiler emissions and six
+   inherited assets (one certificate, three protocol files and libsctp JS/WASM).
+   Those six fixed asset paths and their full SHA-256 values are pinned in
+   `EXPECTED_PARENT.json` and verified independently of compilation. All 192
+   baseline emissions must exactly reproduce the parent's emission inventory;
    all 198 candidate emissions must retain the baseline inventory plus exactly
-   six new helper emissions. Copy `/qualification/COMPILATION_COMPARISON.json`
+   six new helper emissions. The inherited assets remain unchanged, making 204
+   files in the final candidate build. Copy `/qualification/COMPILATION_COMPARISON.json`
    from a created, unstarted compiler container.
 2. Build the final `candidate` target with the same cache. Only genuinely changed
    compiled `.js`, `.js.map` and `.d.ts` files from the eight approved module
@@ -36,7 +41,10 @@ not reused as this candidate's frozen hashes.
 4. Save the private candidate and run `seal_export.py`. The seal checks every
    uncompressed layer digest, final-layer paths, root ownership, directory mode
    0755, file mode 0644, actual exported module bytes, retained launcher and all
-   tested image identities against the exact export. Its qualified receipt is
+   tested image identities against the exact export. It reconstructs the entire
+   parent build (192 emissions plus six pinned assets) and the entire candidate
+   build (198 emissions plus those same six assets), and requires byte identity
+   for all inherited assets. Its qualified receipt is
    written only after these checks pass.
 
 The image remains private and unpublished. Qualification covers synthetic

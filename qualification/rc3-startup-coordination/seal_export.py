@@ -17,6 +17,9 @@ SUFFIXES = (".js", ".js.map", ".d.ts")
 ALLOWED = {BUILD + module + suffix for module in APPROVED_MODULES for suffix in SUFFIXES}
 ADDED = {module + suffix for module in NEW_MODULES for suffix in SUFFIXES}
 SOURCE_CHANGES = sorted("src/" + module + ".ts" for module in APPROVED_MODULES)
+INHERITED_ASSET_PATHS = {"mqtt/mqtt-eufy.crt", "mqtt/proto/lock.proto",
+                         "push/proto/checkin.proto", "push/proto/mcs.proto",
+                         "rtc/libsctp/libsctp_0_0_2.js", "rtc/libsctp/libsctp_0_0_2.wasm"}
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 MODULES = {BUILD + module + ".js" for module in APPROVED_MODULES | {
@@ -53,6 +56,9 @@ def main():
     assert len(expected["diffIds"]) == 11 and all(DIGEST.fullmatch(row) for row in expected["diffIds"])
     assert SHA.fullmatch(expected["parentExportSha256"])
     assert expected["baselineEmissionCount"] == 192 and expected["candidateEmissionCount"] == 198
+    assert expected["parentBuildFileCount"] == 198 and expected["candidateBuildFileCount"] == 204
+    assets = expected["parentNonEmissionAssets"]
+    assert set(assets) == INHERITED_ASSET_PATHS and all(SHA.fullmatch(digest) for digest in assets.values())
     contracts = expected["fixtureReceipts"]
     assert isinstance(contracts, dict) and len(contracts) == 3, "Missing frozen fixture contracts"
     assert contracts["PACKAGED_PUSH_STATUS.json"]["cases"] == 20
@@ -69,6 +75,10 @@ def main():
                  "networkDisabledDuringCompilation", "dependenciesFromParent", "compilerStageOnly"):
         assert compilation[flag] is True
     assert compilation["compilerVersion"] == "5.9.3"
+    assert compilation["parentBuildFileCount"] == 198 and compilation["candidateBuildFileCount"] == 204
+    assert compilation["inheritedNonEmissionAssetCount"] == 6
+    assert compilation["parentNonEmissionAssetsMatchPinned"] is True
+    assert compilation["parentNonEmissionAssets"] == assets
     for receipt in (comparison, compilation):
         assert receipt["parentManifest"] == expected["parentManifest"]
         assert receipt["parentConfig"] == expected["parentConfig"]
@@ -90,6 +100,7 @@ def main():
     baseline, candidate = compilation["baselineEmissions"], compilation["candidateEmissions"]
     assert len(baseline) == compilation["baselineEmissionCount"] == 192
     assert len(candidate) == compilation["candidateEmissionCount"] == 198
+    assert not set(assets) & set(candidate), "Inherited assets overlap compiler emissions"
     assert set(candidate) == set(baseline) | ADDED and not set(baseline) & ADDED
     assert sorted(compilation["addedFiles"]) == sorted(ADDED)
     assert all(SHA.fullmatch(digest) for digest in (*baseline.values(), *candidate.values()))
@@ -157,16 +168,24 @@ def main():
         for layer, digest in zip(manifest["Layers"], diffs):
             assert "sha256:" + hashlib.file_digest(archive.extractfile(layer), "sha256").hexdigest() == digest
         # Reconstruct parent targets from the cryptographically retained layers.
-        retained_targets = {BUILD + name for name in baseline} | (MODULES - {BUILD + name for name in ADDED}) | {"/run.sh"}
+        retained_targets = {BUILD + name for name in set(baseline) | set(assets)} | (MODULES - {BUILD + name for name in ADDED}) | {"/run.sh"}
         retained_hashes = {}
+        retained_build = {}
         for layer in manifest["Layers"][:-1]:
             with tarfile.open(fileobj=archive.extractfile(layer), mode="r|*") as filesystem:
                 for member in filesystem:
                     file = canonical(member.name)
+                    basename = PurePosixPath(file).name
                     if file in retained_targets:
                         assert member.isfile(), "Expected retained target is not a regular file"
                         retained_hashes[file] = hashlib.file_digest(filesystem.extractfile(member), "sha256").hexdigest()
-                    basename = PurePosixPath(file).name
+                    if file.startswith(BUILD) and not basename.startswith(".wh."):
+                        assert member.isfile() or member.isdir(), "Unexpected parent build entry type"
+                        if member.isfile():
+                            digest = retained_hashes.get(file)
+                            if digest is None:
+                                digest = hashlib.file_digest(filesystem.extractfile(member), "sha256").hexdigest()
+                            retained_build[file.removeprefix(BUILD)] = digest
                     if basename.startswith(".wh."):
                         parent = PurePosixPath(file).parent
                         removed = str(parent / basename.removeprefix(".wh."))
@@ -175,9 +194,17 @@ def main():
                                            for target in retained_targets), "Retained target directory was made opaque"
                         else:
                             assert not any(target == removed or target.startswith(removed + "/") for target in retained_targets), "Retained target was whiteouted"
+                        for name in tuple(retained_build):
+                            target = BUILD + name
+                            opaque_removed = basename == ".wh..wh..opq" and target.startswith(str(parent).rstrip("/") + "/")
+                            if opaque_removed or target == removed or target.startswith(removed + "/"):
+                                del retained_build[name]
         assert retained_hashes.keys() == retained_targets
         assert retained_hashes["/run.sh"] == expected["launcherSha256"]
         assert {name: retained_hashes[BUILD + name] for name in baseline} == baseline
+        retained_assets = {name: retained_hashes[BUILD + name] for name in assets}
+        assert retained_assets == assets, "Inherited non-emission asset bytes differ from pinned parent"
+        assert len(retained_build) == 198 and retained_build == {**baseline, **assets}, "Parent complete build inventory mismatch"
         directory_allowlist = {"/"}
         for file in emitted_changes:
             directory_allowlist.update(str(parent) for parent in PurePosixPath(file).parents)
@@ -206,6 +233,9 @@ def main():
         assert final_modules == module_hashes, "Fixture modules do not match the export"
         final_emissions = {name: delta_files.get(BUILD + name, retained_hashes.get(BUILD + name)) for name in candidate}
         assert final_emissions == candidate, "Final production emissions differ from compiler receipt"
+        final_build = {**retained_build, **{file.removeprefix(BUILD): digest for file, digest in delta_files.items()}}
+        assert len(final_build) == 204 and final_build == {**candidate, **assets}, "Final complete build inventory mismatch"
+        assert {name: final_build[name] for name in assets} == retained_assets, "Inherited asset changed in candidate"
 
         def bind_identity(ident):
             assert isinstance(ident, str) and DIGEST.fullmatch(ident)
@@ -226,6 +256,9 @@ def main():
                "diffIds": diffs, "allExportLayerDiffIdsVerified": True,
                "parentFilesystemLayersRetained": True, "addedFilesystemLayers": 1,
                "baselineEmissionCount": 192, "candidateEmissionCount": 198,
+               "parentBuildFileCount": 198, "candidateBuildFileCount": 204,
+               "inheritedNonEmissionAssetCount": 6, "parentNonEmissionAssets": retained_assets,
+               "inheritedNonEmissionAssetsPreserved": True, "allBuildFileBytesVerified": True,
                "allProductionEmissionBytesVerified": True, "changedCompiledFiles": delta_files,
                "launcherSha256": expected["launcherSha256"], "testedModuleHashes": module_hashes,
                "sourceCommit": expected["sourceCommit"], "sourceHashes": expected["sourceHashes"],

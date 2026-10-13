@@ -16,11 +16,21 @@ const allowedSource = modules.map(module => `src/${module}.ts`).sort();
 const addedSource = addedModules.map(module => `src/${module}.ts`).sort();
 const allowedOutputs = new Set(modules.flatMap(module => ['.d.ts', '.js', '.js.map'].map(suffix => module + suffix)));
 const addedOutputs = addedModules.flatMap(module => ['.d.ts', '.js', '.js.map'].map(suffix => module + suffix)).sort();
+const inheritedAssetPaths = ['mqtt/mqtt-eufy.crt', 'mqtt/proto/lock.proto',
+  'push/proto/checkin.proto', 'push/proto/mcs.proto',
+  'rtc/libsctp/libsctp_0_0_2.js', 'rtc/libsctp/libsctp_0_0_2.wasm'].sort();
 const sha = raw => crypto.createHash('sha256').update(raw).digest('hex');
 const isSha = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 assert.equal(expected.inputSealed, true, 'Source and fixture contract must be frozen before compilation');
 assert(/^[0-9a-f]{40}$/.test(expected.sourceCommit || ''), 'Missing frozen source commit');
 assert(expected.fixtureReceipts && Object.keys(expected.fixtureReceipts).length === 3, 'Fixture contract is incomplete');
+assert.equal(expected.baselineEmissionCount, 192);
+assert.equal(expected.candidateEmissionCount, 198);
+assert.equal(expected.parentBuildFileCount, 198);
+assert.equal(expected.candidateBuildFileCount, 204);
+assert.deepEqual(Object.keys(expected.parentNonEmissionAssets).sort(), inheritedAssetPaths,
+  'Inherited non-emission asset inventory changed');
+assert(Object.values(expected.parentNonEmissionAssets).every(isSha), 'Unsealed inherited asset digest');
 
 function files(directory) {
   const rows = {};
@@ -59,7 +69,11 @@ assert.equal(sha(fs.readFileSync('/run.sh')), expected.launcherSha256, 'Parent l
 const compilerPackage = require(path.join(parent, 'node_modules/typescript/package.json'));
 assert.equal(compilerPackage.version, '5.9.3', 'Unexpected parent TypeScript compiler');
 const parentBuild = files(path.join(parent, 'build'));
-assert.equal(Object.keys(parentBuild).length, 192, 'Parent production emission inventory changed');
+assert.equal(Object.keys(parentBuild).length, 198, 'Parent complete build inventory changed');
+const inheritedAssets = Object.fromEntries(inheritedAssetPaths.map(file => [file, parentBuild[file]]));
+assert.deepEqual(inheritedAssets, expected.parentNonEmissionAssets, 'Inherited asset bytes differ from pinned parent');
+const parentEmissions = Object.fromEntries(Object.entries(parentBuild).filter(([file]) => !inheritedAssetPaths.includes(file)));
+assert.equal(Object.keys(parentEmissions).length, 192, 'Parent production emission inventory changed');
 for (const variant of ['baseline', 'candidate']) {
   const directory = path.join(root, variant);
   fs.symlinkSync(path.join(parent, 'node_modules'), path.join(directory, 'node_modules'), 'dir');
@@ -71,7 +85,12 @@ const baselineBuild = files(path.join(root, 'baseline/build'));
 const candidateBuild = files(path.join(root, 'candidate/build'));
 assert.equal(Object.keys(baselineBuild).length, expected.baselineEmissionCount);
 assert.equal(Object.keys(candidateBuild).length, expected.candidateEmissionCount);
-assert.deepEqual(baselineBuild, parentBuild, 'Baseline production emissions differ from exact parent');
+assert.deepEqual(baselineBuild, parentEmissions, 'Baseline production emissions differ from exact parent');
+assert(inheritedAssetPaths.every(file => !Object.hasOwn(candidateBuild, file)),
+  'Compiler emitted an inherited non-emission asset');
+assert.deepEqual(files(path.join(parent, 'build')), parentBuild, 'Parent build inputs changed during compilation');
+assert.equal(Object.keys({...candidateBuild, ...inheritedAssets}).length, 204,
+  'Candidate complete build inventory changed');
 assert.deepEqual(Object.keys(candidateBuild).sort(), [...Object.keys(baselineBuild), ...addedOutputs].sort(),
   'Candidate production emissions must retain the baseline plus six helper outputs');
 const changedFiles = Object.keys(candidateBuild).filter(file => baselineBuild[file] !== candidateBuild[file]).sort();
@@ -96,6 +115,10 @@ const receipt = {passed: true, parentManifest: expected.parentManifest,
   parentConfig: expected.parentConfig, candidateVersion: expected.candidateVersion,
   sourceCommit: expected.sourceCommit, compilerVersion: compilerPackage.version,
   sourceChanges, sourceHashes: inputs, baselineEmissionsMatchParent: true,
+  parentBuildFileCount: Object.keys(parentBuild).length,
+  candidateBuildFileCount: Object.keys({...candidateBuild, ...inheritedAssets}).length,
+  inheritedNonEmissionAssetCount: inheritedAssetPaths.length,
+  parentNonEmissionAssets: inheritedAssets, parentNonEmissionAssetsMatchPinned: true,
   productionTypecheckPassed: true, baselineEmissionCount: Object.keys(baselineBuild).length,
   candidateEmissionCount: Object.keys(candidateBuild).length, baselineEmissions: baselineBuild,
   candidateEmissions: candidateBuild, changedFiles: delta, addedFiles: addedOutputs,
