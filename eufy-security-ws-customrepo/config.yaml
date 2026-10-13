@@ -1,6 +1,6 @@
 name: eufy-security-ws regional RTC RC3 login retry
 description: RC3-derived bounded initial Mega login retry candidate
-version: 3.0.18-regional-rtc-rc3-login-retry.2
+version: 3.0.18-regional-rtc-rc3-login-retry.3
 slug: eufy_security_ws_customrepo
 url: https://github.com/genomez/hassio-eufy-security-ws
 init: false
