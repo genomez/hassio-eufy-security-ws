@@ -1,0 +1,379 @@
+import { createHash, createHmac, randomUUID } from "crypto";
+import { EventEmitter } from "events";
+
+import { rootHTTPLogger } from "../logging";
+import {
+  DEFAULT_RTC_WS_PATH,
+  DEFAULT_SMART_HOST,
+  EU_SMART_HOST,
+  RtcInnerMessage,
+  RtcSignalingOptions,
+  RtcWsEnvelope,
+} from "./types";
+
+/** Narrow regional test: only FR changes; explicit smartHost callers always win. */
+export function defaultSmartHostForRegion(region?: string): string {
+  return region?.trim().toUpperCase() === "FR" ? EU_SMART_HOST : DEFAULT_SMART_HOST;
+}
+
+/** The portal sends its EU cluster, not the FR country, in the WebSocket auth payload. */
+export function defaultSignalingRegionForCountry(country?: string): string {
+  const normalized = country?.trim().toUpperCase() || "US";
+  return normalized === "FR" ? "EU" : normalized;
+}
+
+export interface RtcSignalingEvents {
+  message: (inner: RtcInnerMessage, envelope: RtcWsEnvelope) => void;
+  open: () => void;
+  close: (code: number, reason: string) => void;
+  error: (err: Error) => void;
+}
+
+export interface RtcSignFetchOptions {
+  signal?: AbortSignal;
+  reportPhase?: (phase: string, details?: Record<string, unknown>) => void;
+}
+
+export class RtcSignalingFetchError extends Error {
+  constructor(
+    message: string,
+    public readonly httpStatus: number,
+    public readonly apiCode: number | undefined,
+    public readonly revokedMegaToken: boolean
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+    this.name = "RtcSignalingFetchError";
+  }
+}
+
+function isRevokedMegaTokenResponse(status: number, message?: string): boolean {
+  if (status !== 401 || !message) {
+    return false;
+  }
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("token") &&
+    (normalized.includes("kicked out") || normalized.includes("does not exist") || normalized.includes("not exist"))
+  );
+}
+
+/** Fail-closed classifier: only errors typed at the sign endpoint can trigger recovery. */
+export function isRevokedMegaTokenSignError(error: unknown): error is RtcSignalingFetchError {
+  return error instanceof RtcSignalingFetchError && error.revokedMegaToken;
+}
+
+function base64urlJson(obj: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(obj), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/**
+ * T9000 RTC signaling WebSocket (security-smart.eufylife.com).
+ * Phase 1: sign → subprotocol auth → sendAuth → receive envelopes.
+ */
+export class RtcSignalingClient extends EventEmitter {
+  private ws?: WebSocket;
+  private sign?: string;
+  private readonly opts: Required<Pick<RtcSignalingOptions, "smartHost" | "source" | "connectTimeoutMs" | "region">> &
+    RtcSignalingOptions;
+
+  constructor(options: RtcSignalingOptions) {
+    const region = options.region?.trim().toUpperCase() || "US";
+    super();
+    this.opts = {
+      source: "WEB",
+      connectTimeoutMs: 15000,
+      ...options,
+      region,
+      smartHost: options.smartHost ?? defaultSmartHostForRegion(region),
+    };
+  }
+
+  public static gtokenFromUserId(userId: string): string {
+    return createHash("md5").update(userId).digest("hex");
+  }
+
+  public getWsUrl(): string {
+    return `wss://${this.opts.smartHost ?? DEFAULT_SMART_HOST}${DEFAULT_RTC_WS_PATH}`;
+  }
+
+  /** GET /v1/smart/nvr/ws/sign */
+  public async fetchSign(options: RtcSignFetchOptions = {}): Promise<string> {
+    const host = this.opts.smartHost ?? DEFAULT_SMART_HOST;
+    const url = `https://${host}/v1/smart/nvr/ws/sign`;
+    const report = (phase: string, details: Record<string, unknown> = {}): void => {
+      try {
+        options.reportPhase?.(phase, details);
+      } catch {
+        /* diagnostics must never change signaling behavior */
+      }
+    };
+    const requestOptions: RequestInit = {
+      headers: {
+        "Web-Country": this.opts.region,
+        "X-Auth-Token": this.opts.authToken,
+        "App-Name": "eufy_mega",
+        "Model-Type": "WEB",
+        GToken: this.opts.gtoken,
+        Origin: "https://security.eufy.com",
+      },
+    };
+    if (options.signal !== undefined) {
+      requestOptions.signal = options.signal;
+    }
+
+    try {
+      report("fetch_sign_request_dispatching");
+      const responsePromise = fetch(url, requestOptions);
+      report("fetch_sign_request_dispatched");
+      const res = await responsePromise;
+      report("fetch_sign_response_headers", { status: res.status, ok: res.ok });
+      report("fetch_sign_body_read_start");
+      const body = (await res.json()) as { code?: number; data?: string; msg?: string };
+      report("fetch_sign_body_read_complete", { apiCode: body.code, hasData: !!body.data });
+      if (!res.ok || body.code !== 0 || !body.data) {
+        const revokedMegaToken = isRevokedMegaTokenResponse(res.status, body.msg);
+        throw new RtcSignalingFetchError(
+          revokedMegaToken
+            ? `RtcSignaling fetchSign failed: HTTP ${res.status} revoked mega token`
+            : `RtcSignaling fetchSign failed: HTTP ${res.status} ${body.msg ?? ""}`,
+          res.status,
+          body.code,
+          revokedMegaToken
+        );
+      }
+      this.sign = body.data;
+      return body.data;
+    } catch (error) {
+      report(options.signal?.aborted ? "fetch_sign_request_aborted" : "fetch_sign_request_rejected", {
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      throw error;
+    }
+  }
+
+  public async connect(): Promise<void> {
+    if (this.ws) {
+      return;
+    }
+    const sign = this.sign ?? (await this.fetchSign());
+    const signalingRegion = defaultSignalingRegionForCountry(this.opts.region);
+    const subprotoPayload = {
+      region: signalingRegion,
+      type: "NVR",
+      sn: this.opts.stationSn,
+      token: this.opts.authToken,
+      gtoken: this.opts.gtoken,
+      sign,
+      appName: "eufy_mega",
+      modelType: "WEB",
+    };
+    const subproto = base64urlJson(subprotoPayload);
+    const url = this.getWsUrl();
+
+    rootHTTPLogger.info("RtcSignaling connecting", {
+      url,
+      webCountry: this.opts.region,
+      signalingRegion,
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`RtcSignaling connect timeout after ${this.opts.connectTimeoutMs}ms`));
+      }, this.opts.connectTimeoutMs);
+
+      const ws = new WebSocket(url, ["v1", subproto]);
+      this.ws = ws;
+
+      ws.addEventListener("open", () => {
+        clearTimeout(timer);
+        this.sendAuth(sign);
+        rootHTTPLogger.info("RtcSignaling open");
+        this.emit("open");
+        resolve();
+      });
+
+      ws.addEventListener("message", (ev: MessageEvent) => {
+        void this.handleWireMessage(ev.data);
+      });
+
+      ws.addEventListener("close", (ev: CloseEvent) => {
+        clearTimeout(timer);
+        this.ws = undefined;
+        rootHTTPLogger.info("RtcSignaling close", {
+          code: ev.code,
+          reason: ev.reason || undefined,
+          stationSn: this.opts.stationSn,
+        });
+        this.emit("close", ev.code, ev.reason ?? "");
+      });
+
+      ws.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("RtcSignaling WebSocket error"));
+      });
+    });
+  }
+
+  /** Re-send auth to keep signaling WS alive (hub closes idle sessions ~83s). */
+  public sendKeepalive(): void {
+    if (!this.sign) {
+      return;
+    }
+    this.sendAuth(this.sign);
+  }
+
+  /** action:1 auth — matches web portal sendAuth(). */
+  public sendAuth(sign?: string): void {
+    const s = sign ?? this.sign;
+    if (!s) {
+      throw new Error("RtcSignaling sendAuth: no sign");
+    }
+    const inner = {
+      code: 200,
+      action: 1,
+      data: s,
+      sn: this.opts.stationSn,
+      source: this.opts.source,
+      ts: Math.floor(Date.now() / 1000),
+    };
+    this.sendEnvelope("0", inner);
+  }
+
+  /** Portal account field: HmacSHA256(channelId+adminUserId+ts, authToken). */
+  public static sessionAccount(channelId: number, adminUserId: string, ts: number, authToken: string): string {
+    const message = `${channelId}${adminUserId}${ts}`;
+    return createHmac("sha256", authToken).update(message).digest("hex");
+  }
+
+  /** action:3 scall/call — starts WebRTC negotiation. */
+  public sendCall(channelId = 0): void {
+    this.sendSession("scall", {}, channelId);
+  }
+
+  /** action:3 ack after scall status 200. */
+  public sendAck(channelId = 0): void {
+    this.sendSession("ack", {}, channelId);
+  }
+
+  /** action:3 info — SDP answer (portal: channelId 0, payload { sdp }). */
+  public sendInfoSdp(sdpJson: string, channelId = 0): void {
+    this.sendSession("info", { sdp: sdpJson }, channelId);
+  }
+
+  /** action:3 info — trickle ICE (portal: channelId 1, payload { candidate }). */
+  public sendInfoCandidate(candidate: string, channelId = 1): void {
+    this.sendSession("info", { candidate }, channelId);
+  }
+
+  /** action:3 info — end-of-candidates on trickle channel (portal channelId 1). */
+  public sendInfoEndOfCandidates(channelId = 1): void {
+    this.sendSession("info", { candidate: "" }, channelId);
+  }
+
+  /** action:3 info — legacy scall CANDIDATE format (channel 0). */
+  public sendInfoCandidateScall(candidate: string, channelId = 0): void {
+    this.sendSession("info", { format: "CANDIDATE", value: candidate }, channelId);
+  }
+
+  /** action:3 info — legacy end-of-candidates on scall channel. */
+  public sendInfoEndOfCandidatesScall(channelId = 0): void {
+    this.sendSession("info", { format: "CANDIDATE", value: "" }, channelId);
+  }
+
+  /** action:3 session message (scall, call, info, …). */
+  public sendSession(dataType: string, payload: Record<string, unknown> = {}, channelId = 0): void {
+    const ts = Math.floor(Date.now() / 1000);
+    const adminUserId = this.opts.adminUserId ?? "";
+    const inner = {
+      code: 200,
+      action: 3,
+      sessionId: this.sign,
+      sn: this.opts.stationSn,
+      channelId,
+      isResponse: 0,
+      dataType,
+      source: this.opts.source,
+      ts,
+      data: JSON.stringify({
+        timestamp: ts,
+        account: RtcSignalingClient.sessionAccount(channelId, adminUserId, ts, this.opts.authToken),
+        ...payload,
+      }),
+    };
+    const msgid = `${this.opts.authToken}_${randomUUID().replace(/-/g, "")}`;
+    if (process.env.RTC_VERBOSE === "1" || process.env.RTC_VERBOSE === "true") {
+      rootHTTPLogger.info("RtcSignaling sendSession", {
+        dataType,
+        channelId,
+        payloadKeys: Object.keys(payload),
+        sdpLen: typeof payload.sdp === "string" ? payload.sdp.length : undefined,
+        candidate: typeof payload.candidate === "string" ? payload.candidate.slice(0, 48) : undefined,
+      });
+    }
+    this.sendEnvelope(msgid, inner);
+  }
+
+  public sendHangup(channelId = 0): void {
+    this.sendSession("hangup", {}, channelId);
+  }
+
+  public close(): void {
+    this.ws?.close();
+    this.ws = undefined;
+  }
+
+  private sendEnvelope(msgid: string, inner: Record<string, unknown>): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("RtcSignaling not connected");
+    }
+    const envelope: RtcWsEnvelope = {
+      msgid,
+      data: JSON.stringify(inner),
+    };
+    this.ws.send(JSON.stringify(envelope));
+  }
+
+  private async handleWireMessage(raw: unknown): Promise<void> {
+    let text: string;
+    if (typeof raw === "string") {
+      text = raw;
+    } else if (raw instanceof Blob) {
+      text = await raw.text();
+    } else if (raw instanceof ArrayBuffer) {
+      text = Buffer.from(raw).toString("utf8");
+    } else if (Buffer.isBuffer(raw)) {
+      text = raw.toString("utf8");
+    } else {
+      return;
+    }
+
+    let envelope: RtcWsEnvelope;
+    try {
+      envelope = JSON.parse(text) as RtcWsEnvelope;
+    } catch {
+      return;
+    }
+    if (!envelope.data) {
+      return;
+    }
+
+    let inner: RtcInnerMessage;
+    try {
+      inner = JSON.parse(envelope.data) as RtcInnerMessage;
+    } catch {
+      return;
+    }
+
+    rootHTTPLogger.debug("RtcSignaling message", {
+      dataType: inner.dataType,
+      action: inner.action,
+      isResponse: inner.isResponse,
+    });
+    this.emit("message", inner, envelope);
+  }
+}

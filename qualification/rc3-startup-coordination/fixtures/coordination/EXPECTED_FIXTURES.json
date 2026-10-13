@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "suite": "startup-coordination-and-safe-diagnostics",
+  "expectedCases": 82,
+  "coordinationCases": 40,
+  "diagnosticCases": 40,
+  "semanticControlCases": 2,
+  "baselineExpectedFailedControls": 2,
+  "newReceiptFilename": "PACKAGED_STARTUP_COORDINATION.json",
+  "preservedPushRegressionCases": 20,
+  "preservedLoginRetryRegressionCases": 34,
+  "hostedProductTranspilation": false,
+  "realCloudAuthentication": false,
+  "productionAccess": false,
+  "testedModules": [
+    "http/api", "http/station", "p2p/session", "rtc/rtcCommandBridge",
+    "rtc/rtcPacket", "http/pushRequestDiagnostics", "rtc/rtcCameraInfoCoordinator"
+  ]
+}

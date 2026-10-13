@@ -1,0 +1,7 @@
+{
+  "launcherSha256": "0848647298e5b8b2e6eaf78910885560fc66614652070f680e51fe4a0ff18039",
+  "parentManifest": "sha256:8cb3d1854beb428803be7e50dcd038faf4b24ed0bfe3c4e7d63b62cec2c67a57",
+  "launcherUnchangedFromParent": true,
+  "containerNetwork": "none",
+  "realAuthTested": false
+}

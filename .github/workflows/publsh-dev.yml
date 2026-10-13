@@ -1,4 +1,4 @@
-name: Qualify RC3 push status candidate
+name: Qualify RC3 startup coordination candidate
 
 on:
   workflow_dispatch:
@@ -7,18 +7,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: rc3-push-status-qualification-${{ github.ref }}
+  group: rc3-startup-coordination-qualification-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   qualify:
-    if: github.ref == 'refs/heads/rc3-push-status-qualification-20261012'
+    if: github.ref == 'refs/heads/rc3-startup-coordination-qualification-20261013'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      PARENT: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:28aeceae1c53c8d2d1351a51801c2f75b386243321e19146f78d910d509e0cea
-      COMPILER: local/eufy-rc3-push-status-compiler:3.0.18-regional-rtc-rc3-login-retry.3
-      CANDIDATE: local/eufy-rc3-push-status:3.0.18-regional-rtc-rc3-login-retry.3
+      PARENT: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:8cb3d1854beb428803be7e50dcd038faf4b24ed0bfe3c4e7d63b62cec2c67a57
+      COMPILER: local/eufy-rc3-startup-coordination-compiler:3.0.18-regional-rtc-rc3-login-retry.4
+      CANDIDATE: local/eufy-rc3-startup-coordination:3.0.18-regional-rtc-rc3-login-retry.4
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -29,31 +29,31 @@ jobs:
           set -euo pipefail
           mkdir -p qualification-results
           docker pull --platform linux/amd64 "$PARENT"
-          docker build --network none --platform linux/amd64 --pull=false --target compiler --tag "$COMPILER" --file qualification/rc3-push-status/Dockerfile.candidate .
-          RECEIPT_CONTAINER="rc3-push-status-compiler-receipt-${GITHUB_RUN_ID}"
+          docker build --network none --platform linux/amd64 --pull=false --target compiler --tag "$COMPILER" --file qualification/rc3-startup-coordination/Dockerfile.candidate .
+          RECEIPT_CONTAINER="rc3-startup-coordination-compiler-receipt-${GITHUB_RUN_ID}"
           trap 'docker rm "$RECEIPT_CONTAINER" >/dev/null 2>&1 || true' EXIT
           docker create --name "$RECEIPT_CONTAINER" --entrypoint /bin/true "$COMPILER" >/dev/null
           docker cp "$RECEIPT_CONTAINER:/qualification/COMPILATION_COMPARISON.json" qualification-results/COMPILATION_COMPARISON.json
           docker rm "$RECEIPT_CONTAINER" >/dev/null
           trap - EXIT
-          docker build --network none --platform linux/amd64 --pull=false --target candidate --tag "$CANDIDATE" --file qualification/rc3-push-status/Dockerfile.candidate .
-          python3 qualification/rc3-push-status/compare_images.py --original "$PARENT" --candidate "$CANDIDATE" --output qualification-results
-      - name: Qualify compiled status, login retry and genuine default startup
+          docker build --network none --platform linux/amd64 --pull=false --target candidate --tag "$CANDIDATE" --file qualification/rc3-startup-coordination/Dockerfile.candidate .
+          python3 qualification/rc3-startup-coordination/compare_images.py --original "$PARENT" --candidate "$CANDIDATE" --output qualification-results
+      - name: Qualify startup coordination, preserved regressions and default startup
         shell: bash
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=15s 480s python3 qualification/rc3-push-status/fixtures/qualify.py --original "$PARENT" --candidate "$CANDIDATE" --output qualification-results
+          timeout --signal=TERM --kill-after=15s 480s python3 qualification/rc3-startup-coordination/fixtures/qualify.py --original "$PARENT" --candidate "$CANDIDATE" --output qualification-results
       - name: Export and bind exact tested image without publishing
         shell: bash
         run: |
           set -euo pipefail
           docker image save "$CANDIDATE" | gzip -n > qualification-results/candidate-image.tar.gz
-          python3 qualification/rc3-push-status/seal_export.py --export qualification-results/candidate-image.tar.gz --results qualification-results
+          python3 qualification/rc3-startup-coordination/seal_export.py --export qualification-results/candidate-image.tar.gz --results qualification-results
       - name: Retain qualification receipts and exact candidate export
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: rc3-push-status-qualification-${{ github.run_id }}
+          name: rc3-startup-coordination-qualification-${{ github.run_id }}
           path: |
             qualification-results/*.json
             qualification-results/EXPORT_SHA256.txt

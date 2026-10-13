@@ -1,0 +1,11 @@
+export * from "./http";
+export * from "./p2p";
+export * from "./rtc";
+export * from "./push";
+export * from "./interfaces";
+export * from "./eufysecurity";
+export * from "./error";
+export { LoggingCategories, LogLevel, Logger, dummyLogger } from "./logging";
+
+const version: string = require("../package.json").version;
+export const libVersion: string = version;

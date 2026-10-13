@@ -1,0 +1,9 @@
+FROM ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:8cb3d1854beb428803be7e50dcd038faf4b24ed0bfe3c4e7d63b62cec2c67a57 AS compiler
+COPY qualification/rc3-startup-coordination/baseline/ /qualification/baseline/
+COPY qualification/rc3-startup-coordination/candidate/ /qualification/candidate/
+COPY qualification/rc3-startup-coordination/compose.cjs qualification/rc3-startup-coordination/EXPECTED_PARENT.json /qualification/
+RUN --network=none node /qualification/compose.cjs
+
+FROM ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:8cb3d1854beb428803be7e50dcd038faf4b24ed0bfe3c4e7d63b62cec2c67a57 AS candidate
+COPY --from=compiler /delta/ /
+LABEL org.opencontainers.image.version="3.0.18-regional-rtc-rc3-login-retry.4"
