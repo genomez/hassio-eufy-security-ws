@@ -1,63 +1,80 @@
-name: Qualify RC3 push status candidate
+name: Publish qualified RC3 push status export
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Publish exact export or verify anonymous registry identity
+        required: true
+        default: publish
+        type: choice
+        options:
+          - publish
+          - verify-anonymous
 
 permissions:
   contents: read
+  actions: read
+  packages: write
 
 concurrency:
-  group: rc3-push-status-qualification-${{ github.ref }}
+  group: qualified-rc3-image-publication
   cancel-in-progress: false
 
 jobs:
-  qualify:
-    if: github.ref == 'refs/heads/rc3-push-status-qualification-20261012'
+  publish:
+    if: github.ref == 'refs/heads/rc3-push-status-publication-20261012'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      PARENT: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64@sha256:28aeceae1c53c8d2d1351a51801c2f75b386243321e19146f78d910d509e0cea
-      COMPILER: local/eufy-rc3-push-status-compiler:3.0.18-regional-rtc-rc3-login-retry.3
-      CANDIDATE: local/eufy-rc3-push-status:3.0.18-regional-rtc-rc3-login-retry.3
+      IMAGE: ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64:3.0.18-regional-rtc-rc3-login-retry.3
+      LOADED: local/eufy-rc3-push-status:3.0.18-regional-rtc-rc3-login-retry.3
+      EXPECTED_ID: sha256:7804976f8005b424b912ac3721eac04441d42a5323c37fcc2b52b6179ff662d1
+      EXPORT_SHA256: 20dcf91e6118a9e8f9eab4af6ec07e92ce0fd3f16eb5fa24f9bc427348082fcb
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Compile from exact parent dependencies and compose scoped image
+      - name: Load and publish only the exact qualified export
+        if: inputs.operation == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p qualification-results
-          docker pull --platform linux/amd64 "$PARENT"
-          docker build --network none --platform linux/amd64 --pull=false --target compiler --tag "$COMPILER" --file qualification/rc3-push-status/Dockerfile.candidate .
-          RECEIPT_CONTAINER="rc3-push-status-compiler-receipt-${GITHUB_RUN_ID}"
-          trap 'docker rm "$RECEIPT_CONTAINER" >/dev/null 2>&1 || true' EXIT
-          docker create --name "$RECEIPT_CONTAINER" --entrypoint /bin/true "$COMPILER" >/dev/null
-          docker cp "$RECEIPT_CONTAINER:/qualification/COMPILATION_COMPARISON.json" qualification-results/COMPILATION_COMPARISON.json
-          docker rm "$RECEIPT_CONTAINER" >/dev/null
-          trap - EXIT
-          docker build --network none --platform linux/amd64 --pull=false --target candidate --tag "$CANDIDATE" --file qualification/rc3-push-status/Dockerfile.candidate .
-          python3 qualification/rc3-push-status/compare_images.py --original "$PARENT" --candidate "$CANDIDATE" --output qualification-results
-      - name: Qualify compiled status, login retry and genuine default startup
-        shell: bash
-        run: |
-          set -euo pipefail
-          timeout --signal=TERM --kill-after=15s 480s python3 qualification/rc3-push-status/fixtures/qualify.py --original "$PARENT" --candidate "$CANDIDATE" --output qualification-results
-      - name: Export and bind exact tested image without publishing
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker image save "$CANDIDATE" | gzip -n > qualification-results/candidate-image.tar.gz
-          python3 qualification/rc3-push-status/seal_export.py --export qualification-results/candidate-image.tar.gz --results qualification-results
-      - name: Retain qualification receipts and exact candidate export
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          gh api repos/genomez/hassio-eufy-security-ws/actions/artifacts/11779314068 > artifact-source.json
+          python3 -c 'import json; a=json.load(open("artifact-source.json")); assert a["id"] == 11779314068 and not a["expired"] and a["name"] == "rc3-push-status-qualification-38323568379" and a["workflow_run"]["id"] == 38323568379 and a["workflow_run"]["head_sha"] == "22a5d14c09fd291bcae204224acaeae618574e8c"'
+          gh run download 38323568379 --repo "$GITHUB_REPOSITORY" --name rc3-push-status-qualification-38323568379 --dir qualified-export
+          printf '%s  qualified-export/candidate-image.tar.gz\n' "$EXPORT_SHA256" | sha256sum --check --strict
+          python3 qualification/rc3-push-status/seal_export.py --export qualified-export/candidate-image.tar.gz --results qualified-export
+          python3 -c 'import json; a=json.load(open("qualified-export/QUALIFIED_CANDIDATE.json")); e=json.load(open("publication/expected-image.json")); assert a["passed"] and a["exportBoundToTestedImage"] and a["exportSha256"] == e["export_sha256"] and a["configDigest"] == e["image_id"] and a["diffIds"] == e["diff_ids"]'
+          python3 -c 'import json; assert all(json.load(open("qualified-export/"+n))["cleanupComplete"] for n in ["STARTUP_TEMP_CLEANUP.json", "PACKAGED_TEMP_CLEANUP.json"])'
+          docker load --input qualified-export/candidate-image.tar.gz
+          docker image inspect "$LOADED" > loaded-image.json
+          python3 publication/verify_loaded.py
+          python3 publication/verify_registry.py preflight
+          if python3 -c 'import json,sys; sys.exit(0 if json.load(open("registry-preflight.json"))["exists"] else 1)'; then
+            echo 'Identical qualified tag already exists; skipping push.'
+          else
+            printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+            docker tag "$LOADED" "$IMAGE"
+            docker push "$IMAGE"
+          fi
+          python3 publication/verify_registry.py authenticated
+          docker logout ghcr.io >/dev/null 2>&1 || true
+      - name: Verify anonymous manifest, configuration and all eleven layers
+        if: inputs.operation == 'verify-anonymous'
+        run: python3 publication/verify_registry.py anonymous
+      - name: Retain public registry identity receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: rc3-push-status-qualification-${{ github.run_id }}
+          name: rc3-push-status-registry-${{ github.run_id }}
           path: |
-            qualification-results/*.json
-            qualification-results/EXPORT_SHA256.txt
-            qualification-results/candidate-image.tar.gz
+            registry-identity.json
+            registry-preflight.json
+            loaded-image-verification.json
           if-no-files-found: warn
           retention-days: 30
-          compression-level: 0

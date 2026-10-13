@@ -1,44 +1,21 @@
-# Qualified RC3-derived amd64 image
+# Exact push-status image publication verification
 
-Version: `3.0.18-regional-rtc-rc3-login-retry.1`.
+This directory publishes and verifies the already-qualified `.3` image export. It does not rebuild the image or start any container. Expected identity comes from qualification run `38323568379` and `QUALIFIED_CANDIDATE.json`; `source_commit` identifies the approved SDK source commit, not the workflow checkout commit.
 
-This publication loads the sealed image export and pushes it without building,
-relabeling or starting a container. The draft GitHub release is transport storage;
-it must remain a draft so the inherited release-published builder is not triggered.
-The experimental tester descriptor is updated separately after anonymous registry
-verification. The default branch is unchanged.
+The fixed repository is `ghcr.io/genomez/eufy-security-ws-rc3-login-retry-amd64`, version `3.0.18-regional-rtc-rc3-login-retry.3`. The verifier requires exact qualified config digest, Linux/amd64, `/init`, `/run.sh`, the version label and all eleven root filesystem diff IDs. For each registry layer it streams and checks the compressed digest and declared size, then the uncompressed digest against qualification. The exact config digest also binds the complete configuration and labels.
 
-The one-file client product change is in [login-retry.patch](login-retry.patch),
-against client commit `d73b12f19fe73de2be8eff9ea7a2b2f88fe00149` in
-`genomez/eufy-security-client`. Initial passport/login error 4404 permits one fresh
-key exchange and login retry. Same-client initial requests coalesce, login requests
-are serialized, and ownership checks fence replaced or cleared clients. Supplied
-verification and captcha are not automatically retried or replayed. Persisted
-authentication is not deleted.
+Commands:
 
-Add-on reference: `7752652b438a962269e5b57d564325a6cb0fdfe8` in this repository.
-WebSocket source: `cb7534d7c5ee55a02ef0ab99c2275009dcb69282` in
-`bropat/eufy-security-ws`, plus the add-on reference's Mega driver patch and two
-station overlays. The complete accepted client replaces the client build; stale
-client overlays are not applied over it. The runtime launcher includes the
-qualification stage's missing-credentials guard and synthetic-fixture-tested
-handoff. Frozen inputs and receipts are retained by the maintainer.
+```
+python publication/verify_registry.py preflight
+python publication/verify_registry.py authenticated
+python publication/verify_registry.py anonymous --expected-manifest sha256:<verified-manifest-digest> --output <receipt.json>
+```
 
-Sealed export SHA256:
-`b05c31f045ebd6d33fbc008a5fce3f1442f6aa8ef667d7525756c9e395a02638`.
+Hosted `preflight` and `authenticated` modes use only ambient `GITHUB_ACTOR` and `GITHUB_TOKEN`. Anonymous mode obtains a public GHCR pull token transiently in memory; it reads the supplied immutable manifest reference when `--expected-manifest` is present. Redirected requests do not carry registry authorization headers. No authentication values, token response bodies, signed URLs or arbitrary exception text are printed or written.
 
-Image config/ID:
-`sha256:d2747d8a57527afefdbc07f5e8942bfae435ba1055f6c828d05313c58e158490`.
-This is distinct from the registry manifest digest. The verifier binds the
-manifest, exact config and all nine compressed/uncompressed layer hashes.
+Preflight defaults to `registry-preflight.json`. Only a manifest-tag HTTP 404 after successful token retrieval means `exists: false`. An existing tag must pass the same full verification as publication, producing `exists: true`; a different image fails without a successful receipt. The publication workflow must skip pushing an existing exact image and must never replace a conflicting tag. Authentication, transport and other HTTP failures are failures, not evidence of tag absence.
 
-Offline qualification: 86 compiled login/recovery regression cases and 37 RTC
-cases passed. Native module/WASM load, launcher defaults, fake-driver routing and
-fake-driver CLI SIGTERM passed. Runtime rebuild comparison matched 22,026 entries.
-These are synthetic/offline results: no real account, station or production system
-was used. Real FR/EU behavior, persistence, Supervisor admission and long-run
-recovery remain unverified. This does not establish the reporter's root cause.
+Authenticated and anonymous verification default to `registry-identity.json`; `--output` selects a receipt path. Receipts contain fixed image identity and public manifest/config/layer metadata only. Errors emit only a fixed failure marker and exception type. A supplied expected manifest must be a canonical lowercase SHA-256 digest and must match both fetched bytes and the registry digest header.
 
-The image retains inherited Home Assistant base labels and development
-dependencies. Its config is preserved exactly; this is an experimental tester
-package, not a metadata or dependency modernization.
+Registry verification establishes publication identity and layer integrity. It does not demonstrate real authentication, notification delivery or hardware RTC/FLC behavior.
